@@ -7,3 +7,4 @@ wa-auth/
 config.yaml
 .env
 coverage/
+.claude/worktrees/
