@@ -1,0 +1,20 @@
+{
+  "key": {
+    "remoteJid": "120363001234567890@g.us",
+    "fromMe": false,
+    "id": "3EB0C767D82B0F3A3333",
+    "participant": "99988877766655@lid",
+    "participantAlt": "34622222222@s.whatsapp.net",
+    "addressingMode": "lid"
+  },
+  "messageTimestamp": 1758000200,
+  "pushName": "Bob",
+  "message": {
+    "extendedTextMessage": {
+      "text": "morning all, @111222333444555 can you summarise?",
+      "contextInfo": {
+        "mentionedJid": ["111222333444555@lid"]
+      }
+    }
+  }
+}

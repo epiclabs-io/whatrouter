@@ -1,0 +1,17 @@
+{
+  "key": {
+    "remoteJid": "34611111111@s.whatsapp.net",
+    "fromMe": false,
+    "id": "3EB0C767D82B0F3AAAAA"
+  },
+  "messageTimestamp": 1758000800,
+  "pushName": "Alice",
+  "message": {
+    "locationMessage": {
+      "degreesLatitude": 41.3874,
+      "degreesLongitude": 2.1686,
+      "name": "Placa de Catalunya",
+      "address": "Placa de Catalunya, Barcelona"
+    }
+  }
+}

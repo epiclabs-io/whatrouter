@@ -5,6 +5,8 @@
 import { parseArgs } from 'node:util';
 import { loadConfigFile } from './config/load.js';
 import { ConfigError, relayUrl, type Config, type Issue } from './config/schema.js';
+import { createLogger } from './util/log.js';
+import { runPair } from './whatsapp/pair.js';
 
 export const EXIT_OK = 0;
 export const EXIT_FAILURE = 1;
@@ -117,8 +119,12 @@ export async function run(argv: string[], io: CliIo = processIo): Promise<number
     case 'pair': {
       const loaded = await load(io, configPath(values.config));
       if (loaded === null) return EXIT_CONFIG;
-      io.err('pair: not implemented yet (WP3)');
-      return EXIT_FAILURE;
+      return await runPair({
+        config: loaded.config,
+        code: values.code,
+        log: createLogger({ level: loaded.config.logLevel, name: 'pair' }),
+        io,
+      });
     }
 
     case 'env': {

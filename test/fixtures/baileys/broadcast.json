@@ -1,0 +1,16 @@
+{
+  "key": {
+    "remoteJid": "status@broadcast",
+    "fromMe": false,
+    "id": "3EB0C767D82B0F3ADDDD",
+    "participant": "34611111111@s.whatsapp.net"
+  },
+  "messageTimestamp": 1758001100,
+  "pushName": "Alice",
+  "broadcast": true,
+  "message": {
+    "extendedTextMessage": {
+      "text": "a status update nobody asked for"
+    }
+  }
+}

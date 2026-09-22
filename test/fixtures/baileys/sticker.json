@@ -1,0 +1,24 @@
+{
+  "key": {
+    "remoteJid": "34611111111@s.whatsapp.net",
+    "fromMe": false,
+    "id": "3EB0C767D82B0F3A8888"
+  },
+  "messageTimestamp": 1758000700,
+  "pushName": "Alice",
+  "message": {
+    "stickerMessage": {
+      "url": "https://mmg.whatsapp.net/v/t62.7161-24/99887766_1122334455_n.enc",
+      "fileSha256": "c3RpY2tlcnNoYTI1NmZpbGVjb250ZW50cw==",
+      "fileEncSha256": "c3RpY2tlcmVuY3NoYTI1NmZpbGVjb250ZW4=",
+      "mediaKey": "c3RpY2tlcm1lZGlha2V5bWVkaWFrZXkxMjM=",
+      "mimetype": "image/webp",
+      "height": 512,
+      "width": 512,
+      "directPath": "/v/t62.7161-24/99887766_1122334455_n.enc",
+      "fileLength": "9216",
+      "mediaKeyTimestamp": "1758000699",
+      "isAnimated": false
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "key": {
+    "remoteJid": "34611111111@s.whatsapp.net",
+    "fromMe": false,
+    "id": "3EB0C767D82B0F3A5555"
+  },
+  "messageTimestamp": 1758000400,
+  "pushName": "Alice",
+  "message": {
+    "imageMessage": {
+      "url": "https://mmg.whatsapp.net/v/t62.7118-24/12345678_1234567890_n.enc",
+      "mimetype": "image/jpeg",
+      "caption": "look at this sunset",
+      "fileSha256": "Zm9vYmFyc2hhMjU2ZmlsZWNvbnRlbnRzYQ==",
+      "fileLength": "24680",
+      "height": 1280,
+      "width": 960,
+      "mediaKey": "bWVkaWFrZXltZWRpYWtleW1lZGlha2V5MTI=",
+      "fileEncSha256": "ZW5jc2hhMjU2ZmlsZWNvbnRlbnRzYmFzZTY0",
+      "directPath": "/v/t62.7118-24/12345678_1234567890_n.enc",
+      "mediaKeyTimestamp": "1758000399"
+    }
+  }
+}

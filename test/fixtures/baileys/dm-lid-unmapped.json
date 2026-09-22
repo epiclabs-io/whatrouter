@@ -1,0 +1,13 @@
+{
+  "key": {
+    "remoteJid": "12345678901234@lid",
+    "fromMe": false,
+    "id": "3EB0C767D82B0F3A9999",
+    "addressingMode": "lid"
+  },
+  "messageTimestamp": 1758000350,
+  "pushName": "Carol",
+  "message": {
+    "conversation": "first contact, no phone number known yet"
+  }
+}
