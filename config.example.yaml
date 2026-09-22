@@ -8,8 +8,9 @@ listen: 0.0.0.0:8466
 # Omit it and everything falls back to http://localhost:8466.
 public_url: https://whatrouter.example.com
 
-# wa-auth/, whatrouter.sqlite, media/ live here. Use /data in Docker.
-data_dir: ./data
+# wa-auth/, whatrouter.sqlite, media/ live here. /data is the Docker volume;
+# when running with Node directly, use a writable path such as ./data.
+data_dir: /data
 
 log_level: info
 

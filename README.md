@@ -84,8 +84,8 @@ openssl rand -hex 32          # one per profile, paste into config.yaml
 
 Edit `config.yaml`:
 
-- **Set `data_dir: /data`.** The example ships `./data` for the no-Docker case; inside the
-  container that path is not writable and pairing fails with
+- **Keep `data_dir: /data`** (the volume). A relative path such as `./data` resolves under
+  `/app` inside the container, which is not writable, and pairing fails with
   `EACCES: permission denied, mkdir 'data'`.
 - Set `public_url` to the address your Hermes instances will dial
   (`https://whatrouter.example.com`, or `http://<host-ip>:8466` on a LAN).
@@ -157,7 +157,7 @@ optional: without it, voice replies are sent as ordinary audio attachments inste
 npm ci
 npm run build
 
-cp config.example.yaml config.yaml   # edit it
+cp config.example.yaml config.yaml   # edit it; set data_dir to a writable path such as ./data
 node dist/whatrouter.js check-config config.yaml
 node dist/whatrouter.js --config config.yaml pair
 node dist/whatrouter.js --config config.yaml serve
@@ -186,7 +186,7 @@ Top level:
 |---|---|---|---|
 | `listen` | `host:port` | `0.0.0.0:8466` | Address the HTTP/WebSocket server binds. |
 | `public_url` | http(s) URL or null | null | Base URL Hermes dials and media URLs are built from. Without it everything falls back to `http://localhost:<port>` — fine on one host, broken everywhere else. |
-| `data_dir` | path | `./data` | Holds `wa-auth/`, `whatrouter.sqlite`, `media/`. `/data` in Docker. |
+| `data_dir` | path | `./data` | Holds `wa-auth/`, `whatrouter.sqlite`, `media/`. The example sets `/data` (the Docker volume); use a relative path when running with Node. |
 | `log_level` | `trace`…`fatal` | `info` | Overridden by `$WHATROUTER_LOG_LEVEL`. |
 | `whatsapp.edit_streaming` | bool | `false` | Let the agent stream by editing its message; also flips `supports_edit` in the descriptor. Off by default: WhatsApp labels edited messages and rapid edits are a good way to look like a bot. |
 | `whatsapp.send_read_receipts` | bool | `false` | Mark routed incoming messages as read. |

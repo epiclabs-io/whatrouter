@@ -56,7 +56,7 @@ describe('check-config', () => {
     expect(await run(['check-config', EXAMPLE], io)).toBe(0);
     expect(err).toEqual([]);
     expect(out.join('\n')).toContain('listen: 0.0.0.0:8466');
-    expect(out.join('\n')).toContain('data_dir: ./data');
+    expect(out.join('\n')).toContain('data_dir: /data');
     expect(out.join('\n')).toContain('profiles: 2 (4 routes)');
     expect(out.join('\n')).toContain('work [gw-work]: 1 dm, 1 group');
     expect(out.at(-1)).toBe('config OK');

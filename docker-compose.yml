@@ -6,8 +6,8 @@
 #
 # First run, in order:
 #
-#   cp config.example.yaml config.yaml    # then edit it: data_dir MUST be /data,
-#                                         # plus public_url, profiles, routes, secrets
+#   cp config.example.yaml config.yaml    # then edit public_url, profiles, routes,
+#                                         # secrets; keep data_dir: /data (the volume)
 #   docker compose run --rm whatrouter check-config
 #   docker compose run --rm -it whatrouter pair
 #   # ...or, if you cannot scan a QR code on this machine:
