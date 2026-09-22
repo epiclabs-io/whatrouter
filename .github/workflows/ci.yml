@@ -16,4 +16,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      # TODO(WP5): add a `docker build -t whatrouter .` step once the Dockerfile lands.
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t whatrouter:ci .
+      - name: Validate the example config inside the image
+        run: docker run --rm -v "$PWD/config.example.yaml:/data/config.yaml:ro" whatrouter:ci check-config
