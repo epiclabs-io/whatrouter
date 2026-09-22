@@ -1,0 +1,25 @@
+{
+  "key": {
+    "remoteJid": "120363001234567890@g.us",
+    "fromMe": false,
+    "id": "3EB0C767D82B0F3A7777",
+    "participant": "34622222222@s.whatsapp.net"
+  },
+  "messageTimestamp": 1758000600,
+  "pushName": "Bob",
+  "message": {
+    "documentMessage": {
+      "url": "https://mmg.whatsapp.net/v/t62.7119-24/11223344_5566778899_n.enc",
+      "mimetype": "application/pdf",
+      "title": "invoice-2026-09",
+      "fileSha256": "ZG9jc2hhMjU2ZmlsZWNvbnRlbnRzYmFzZTY=",
+      "fileLength": "184320",
+      "pageCount": 2,
+      "mediaKey": "ZG9jbWVkaWFrZXltZWRpYWtleTEyMzQ1Ng==",
+      "fileName": "invoice-2026-09.pdf",
+      "fileEncSha256": "ZG9jZW5jc2hhMjU2ZmlsZWNvbnRlbnRzYQ==",
+      "directPath": "/v/t62.7119-24/11223344_5566778899_n.enc",
+      "mediaKeyTimestamp": "1758000599"
+    }
+  }
+}

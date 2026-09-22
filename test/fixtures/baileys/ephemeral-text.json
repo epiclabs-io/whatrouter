@@ -1,0 +1,23 @@
+{
+  "key": {
+    "remoteJid": "120363001234567890@g.us",
+    "fromMe": false,
+    "id": "3EB0C767D82B0F3ABBBB",
+    "participant": "34622222222@s.whatsapp.net"
+  },
+  "messageTimestamp": 1758000900,
+  "pushName": "Bob",
+  "message": {
+    "ephemeralMessage": {
+      "message": {
+        "extendedTextMessage": {
+          "text": "this one disappears in a week",
+          "contextInfo": {
+            "expiration": 604800,
+            "ephemeralSettingTimestamp": "1757000000"
+          }
+        }
+      }
+    }
+  }
+}

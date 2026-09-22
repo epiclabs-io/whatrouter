@@ -139,11 +139,13 @@ describe('stubs and usage', () => {
     expect(err.every((line) => line.startsWith('error:'))).toBe(true);
   });
 
-  it('pair accepts --code and reports that it is not implemented yet', async () => {
+  // The happy path opens a WhatsApp socket, so the wiring is checked with a --code
+  // value that `runPair` rejects before it ever builds one (see wa-pair.test.ts).
+  it('pair passes --code through to the pairing flow', async () => {
     const path = await writeConfig('valid.yaml', VALID);
     const { io, err } = capture();
-    expect(await run(['--config', path, 'pair', '--code', '+34600000000'], io)).toBe(1);
-    expect(err).toEqual(['pair: not implemented yet (WP3)']);
+    expect(await run(['--config', path, 'pair', '--code', 'not-a-phone'], io)).toBe(1);
+    expect(err[0]).toContain('--code needs a phone number');
   });
 
   it('prints warnings but still succeeds', async () => {

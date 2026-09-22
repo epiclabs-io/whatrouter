@@ -1,0 +1,14 @@
+{
+  "key": {
+    "remoteJid": "99988877766655@lid",
+    "remoteJidAlt": "34622222222@s.whatsapp.net",
+    "fromMe": false,
+    "id": "3EB0C767D82B0F3A4444",
+    "addressingMode": "lid"
+  },
+  "messageTimestamp": 1758000300,
+  "pushName": "Bob",
+  "message": {
+    "conversation": "hi, writing from a lid-addressed chat"
+  }
+}

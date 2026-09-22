@@ -1,0 +1,22 @@
+{
+  "key": {
+    "remoteJid": "34611111111@s.whatsapp.net",
+    "fromMe": false,
+    "id": "3EB0C767D82B0F3A2222"
+  },
+  "messageTimestamp": 1758000100,
+  "pushName": "Alice",
+  "message": {
+    "extendedTextMessage": {
+      "text": "@34600000099 what do you think about this?",
+      "contextInfo": {
+        "stanzaId": "BAE5F1B8C0DE0001",
+        "participant": "34600000099@s.whatsapp.net",
+        "quotedMessage": {
+          "conversation": "Earlier answer from the bot"
+        },
+        "mentionedJid": ["34600000099@s.whatsapp.net"]
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "key": {
+    "remoteJid": "34611111111@s.whatsapp.net",
+    "fromMe": true,
+    "id": "3EB0C767D82B0F3ACCCC"
+  },
+  "messageTimestamp": 1758001000,
+  "pushName": "WhatRouter",
+  "message": {
+    "conversation": "this is our own message coming back"
+  }
+}
