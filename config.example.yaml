@@ -1,0 +1,61 @@
+# WhatRouter example configuration.
+# Copy to config.yaml and edit. Validate with: whatrouter check-config config.yaml
+# Path resolution: --config <path>, else $WHATROUTER_CONFIG, else ./config.yaml.
+
+listen: 0.0.0.0:8466
+
+# Public base URL Hermes instances dial and media URLs are built from.
+# Omit it and everything falls back to http://localhost:8466.
+public_url: https://whatrouter.example.com
+
+# wa-auth/, whatrouter.sqlite, media/ live here. Use /data in Docker.
+data_dir: ./data
+
+log_level: info
+
+whatsapp:
+  edit_streaming: false      # true also flips supports_edit in the descriptor
+  send_read_receipts: false
+  chunk_delay_ms: 300
+  send_timeout_ms: 60000
+
+buffer:
+  max_age_seconds: 1209600   # 14 days
+  wake_cooldown_seconds: 60
+
+media:
+  max_bytes: 26214400        # 25 MiB
+  retention_seconds: 604800  # 7 days
+
+# null = drop messages from chats no route matches.
+default_profile: null
+
+# Profiles may only act on chats routed to them unless this is true.
+allow_unrouted_outbound: false
+
+profiles:
+  work:
+    gateway_id: gw-work
+    # Any string >= 32 chars; must be unique per profile. Generate with:
+    #   openssl rand -hex 32
+    secret: replace-me-work-0000000000000000000000
+    # Alternatives to an inline secret:
+    #   secret: ${WORK_SECRET}            # ${ENV_VAR} interpolation
+    #   secret_file: /run/secrets/work    # file contents, trimmed
+    display_name: Work Agent
+    wake_url: null             # optional GET poked when a message arrives while offline
+    routes:
+      - dm: "+34600000000"
+      - group: "120363001234567890@g.us"
+        require_mention: true
+        allowed_senders: ["+34600000000"]
+
+  home:
+    gateway_id: gw-home
+    secret: replace-me-home-0000000000000000000000
+    display_name: Home Agent
+    wake_url: null
+    routes:
+      - dm: "+34600000001"
+      - group: "120363009876543210@g.us"
+        require_mention: false

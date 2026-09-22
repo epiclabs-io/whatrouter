@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/
+*.sqlite
+*.sqlite-*
+wa-auth/
+config.yaml
+.env
+coverage/
