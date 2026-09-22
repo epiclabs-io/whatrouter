@@ -311,3 +311,15 @@ Order: WP1 → (WP2 ∥ WP3) → WP4 → WP5. WP2/WP3 run in separate git worktr
 - LID resolution: when neither `key.*Alt` nor auth-state mapping yields a phone, the canonical id is the `@lid` JID; routes may therefore need the LID for some first-contact senders (documented; logged at info with the LID so operators can add it).
 - `node:sqlite` is stable enough in Node 24 (verified: no experimental warning locally); Docker base pinned to Node 24.
 - Baileys `getMessage`/retry semantics and 515 restart handled as in Hermes' bridge; edit is best-effort (WhatsApp allows edits of own messages for ~15 min).
+
+## Implementation notes (post-review, 2026-09-22)
+
+Deviations from the layout above that were accepted during review; the behaviour is unchanged.
+
+- Frame assembly lives in `src/relay/ndjson.ts`; the policy and media HTTP routes live inside `src/relay/server.ts` (no separate `media-routes.ts` / `policy.ts`). Policies persist in `src/store/policy.ts`.
+- `Session.idleFlipped` starts `false` on every new connection; the durable flip only gates live delivery and is cleared by the drain, exactly as in the Rust connector.
+- `execute` answers `unsupported op: <op>` before the tenant check; every other op is tenant-checked first.
+- The chat→profile memory that lets a `default_profile`-routed chat be replied to is in memory only (bounded at 1024); after a restart the chat must send again before a reply passes the tenant check.
+- `config.example.yaml` ships `data_dir: /data` so the Docker quick start works verbatim; Node users set a relative path.
+- The runtime image is ~750 MB, ~465 MB of which is Debian's `ffmpeg` (voice-note transcoding). A static ffmpeg would roughly halve it.
+- Verified: `scripts/conformance/run.sh` passes 47/47 against `NousResearch/hermes-agent@2c65d5a` (see `scripts/conformance/HERMES_PIN`).
