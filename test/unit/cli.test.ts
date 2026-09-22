@@ -1,7 +1,7 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { run, type CliIo } from '../../src/cli.js';
 
 const EXAMPLE = 'config.example.yaml';
@@ -13,6 +13,8 @@ function capture(): { io: CliIo; out: string[]; err: string[] } {
 }
 
 let tempDir: string | null = null;
+/** Data dirs `serve` wrote into; removed after each test. */
+const serveDirs: string[] = [];
 
 async function writeConfig(name: string, body: string): Promise<string> {
   tempDir ??= await mkdtemp(join(tmpdir(), 'whatrouter-cli-'));
@@ -21,8 +23,10 @@ async function writeConfig(name: string, body: string): Promise<string> {
   return path;
 }
 
-afterEach(() => {
+afterEach(async () => {
   tempDir = null;
+  vi.unstubAllEnvs();
+  await Promise.all(serveDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 const VALID = `
@@ -118,18 +122,35 @@ describe('env', () => {
 });
 
 describe('stubs and usage', () => {
-  it('serve validates the config, then reports that it is not implemented yet', async () => {
-    const path = await writeConfig('valid.yaml', VALID);
+  /** A config whose data_dir is a throwaway: `serve` creates wa-auth/ + sqlite there. */
+  async function serveConfigPath(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'whatrouter-serve-cli-'));
+    serveDirs.push(dir);
+    const path = join(dir, 'config.yaml');
+    await writeFile(
+      path,
+      // The port never binds: `serve` exits on the unpaired auth state first.
+      `listen: 127.0.0.1:9199\ndata_dir: ${dir}\nprofiles:\n  work:\n    gateway_id: gw-work\n` +
+        `    secret: ${'w'.repeat(40)}\n    routes:\n      - dm: "+34600000000"\n`,
+      'utf8',
+    );
+    return path;
+  }
+
+  it('serve validates the config, then refuses to run unpaired', async () => {
+    vi.stubEnv('WHATROUTER_LOG_LEVEL', 'silent');
+    const path = await serveConfigPath();
     const { io, err } = capture();
-    expect(await run(['--config', path, 'serve'], io)).toBe(1);
-    expect(err).toEqual(['serve: not implemented yet (WP4)']);
+    expect(await run(['--config', path, 'serve'], io)).toBe(2);
+    expect(err.join('\n')).toContain('whatrouter pair');
   });
 
   it('serve is the default command', async () => {
-    const path = await writeConfig('valid.yaml', VALID);
+    vi.stubEnv('WHATROUTER_LOG_LEVEL', 'silent');
+    const path = await serveConfigPath();
     const { io, err } = capture();
-    expect(await run(['--config', path], io)).toBe(1);
-    expect(err).toEqual(['serve: not implemented yet (WP4)']);
+    expect(await run(['--config', path], io)).toBe(2);
+    expect(err.join('\n')).toContain('whatrouter pair');
   });
 
   it('serve exits 2 on an invalid config instead of starting', async () => {

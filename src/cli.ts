@@ -5,6 +5,7 @@
 import { parseArgs } from 'node:util';
 import { loadConfigFile } from './config/load.js';
 import { ConfigError, relayUrl, type Config, type Issue } from './config/schema.js';
+import { runServe } from './serve.js';
 import { createLogger } from './util/log.js';
 import { runPair } from './whatsapp/pair.js';
 
@@ -112,8 +113,11 @@ export async function run(argv: string[], io: CliIo = processIo): Promise<number
     case 'serve': {
       const loaded = await load(io, configPath(values.config));
       if (loaded === null) return EXIT_CONFIG;
-      io.err('serve: not implemented yet (WP4)');
-      return EXIT_FAILURE;
+      return await runServe({
+        config: loaded.config,
+        log: createLogger({ level: loaded.config.logLevel, name: 'whatrouter' }),
+        io,
+      });
     }
 
     case 'pair': {
