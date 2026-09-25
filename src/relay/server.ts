@@ -19,6 +19,7 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import { parseBearer, peekPayload, verifyToken } from './auth.js';
 import { buildDescriptor } from './descriptor.js';
+import { contentDisposition } from './content-disposition.js';
 import { encodeFrame, LineAssembler, parseGatewayFrame } from './ndjson.js';
 import { Session } from './session.js';
 import { mediaUrl } from './media-url.js';
@@ -132,18 +133,6 @@ function rawToString(data: RawData): string {
 
 function clientIp(req: IncomingMessage): string {
   return req.socket.remoteAddress ?? 'unknown';
-}
-
-/** Keeps a header-injection-free `filename="..."`. */
-function sanitizeFilename(name: string | null, fallback: string): string {
-  if (name === null || name.trim() === '') return fallback;
-  const cleaned = name
-    .replace(/[\r\n"\\]/g, '')
-    .replace(/[/\\]/g, '_')
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f]/g, '')
-    .trim();
-  return cleaned === '' ? fallback : cleaned.slice(0, 200);
 }
 
 async function readBody(
@@ -462,7 +451,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     res.writeHead(200, {
       'content-type': found.meta.mime,
       'content-length': String(found.bytes.byteLength),
-      'content-disposition': `inline; filename="${sanitizeFilename(found.meta.filename, id)}"`,
+      'content-disposition': contentDisposition(found.meta.filename, id),
       'cache-control': 'private, max-age=300',
     });
     res.end(found.bytes);

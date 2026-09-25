@@ -406,7 +406,9 @@ describe('http routes', () => {
     });
     expect(mine.status).toBe(200);
     expect(mine.headers.get('content-type')).toBe('image/png');
-    expect(mine.headers.get('content-disposition')).toBe('inline; filename="shot.png"');
+    expect(mine.headers.get('content-disposition')).toBe(
+      'inline; filename="shot.png"; filename*=UTF-8\'\'shot.png',
+    );
     expect(await mine.text()).toBe('PNG-BYTES');
 
     // Another profile must not even learn that the object exists.
@@ -418,6 +420,31 @@ describe('http routes', () => {
 
     const anonymous = await fetch(`${base()}/relay/media/${id}`);
     expect(anonymous.status).toBe(401);
+  });
+
+  it('serves media whose filename contains non-ASCII characters', async () => {
+    // Node's HTTP layer rejects non-ASCII header values outright, which used to
+    // turn every Unicode filename into an HTTP 500 for the downloading gateway.
+    const upload = await fetch(`${base()}/relay/media`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token(WORK)}`,
+        'content-type': 'application/pdf',
+        'x-media-filename': 'r\u00e9sum\u00e9-2026.pdf',
+      },
+      body: Buffer.from('%PDF-1.7 abstract payload'),
+    });
+    expect(upload.status).toBe(200);
+    const { id } = (await upload.json()) as { id: string };
+
+    const res = await fetch(`${base()}/relay/media/${id}`, {
+      headers: { authorization: `Bearer ${token(WORK)}` },
+    });
+    expect(res.status).toBe(200);
+    const disposition = res.headers.get('content-disposition') ?? '';
+    expect(disposition).toContain('inline; filename="r_sum_-2026.pdf"');
+    expect(disposition).toContain("filename*=UTF-8''r%C3%A9sum%C3%A9-2026.pdf");
+    expect(await res.text()).toBe('%PDF-1.7 abstract payload');
   });
 
   it('refuses media above the configured limit', async () => {
