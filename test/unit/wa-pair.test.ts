@@ -1,4 +1,5 @@
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Boom } from '@hapi/boom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runPair } from '../../src/whatsapp/pair.js';
@@ -65,6 +66,8 @@ describe('runPair: QR flow', () => {
     sock.ev.emit('connection.update', { connection: 'open' });
 
     expect(await p.exit).toBe(0);
+    const creds = JSON.parse(await readFile(join(p.dir, 'creds.json'), 'utf8')) as { registered: boolean };
+    expect(creds.registered).toBe(true);
     expect(p.io.out[0]).toBe(
       'Scan this QR with WhatsApp → Settings → Linked devices → Link a device:',
     );

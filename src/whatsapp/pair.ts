@@ -101,6 +101,7 @@ export async function runPair(opts: PairOptions): Promise<number> {
     let qrPrinted = false;
     let codeRequested = false;
     let restarted = false;
+    let completing = false;
 
     const timer = setTimeout(() => {
       io.err(`error: pairing timed out after ${Math.round(timeoutMs / 1000)}s`);
@@ -152,6 +153,11 @@ export async function runPair(opts: PairOptions): Promise<number> {
     }
 
     function onOpen(): void {
+      if (completing) return;
+      completing = true;
+      // Baileys does not reliably mutate this flag while pairing. An authenticated
+      // open socket is the authoritative signal that this device is registered.
+      state.creds.registered = true;
       const me = sock?.user?.id ?? state.creds.me?.id ?? '';
       io.out(`Paired as ${accountDigits(me)}. Credentials saved to ${dir}.`);
       // Give the last `creds.update` room to land before we pull the socket down.
@@ -205,8 +211,10 @@ export async function runPair(opts: PairOptions): Promise<number> {
         markOnlineOnConnect: false,
       });
       sock = next;
-      next.ev.on('creds.update', () => {
-        void saveCreds().catch((err: unknown) => log.error({ err }, 'saving credentials failed'));
+      next.ev.on('creds.update', (update) => {
+        Object.assign(state.creds, update);
+        void saveCreds()
+          .catch((err: unknown) => log.error({ err }, 'saving credentials failed'));
       });
       next.ev.on('connection.update', (update) => {
         try {
