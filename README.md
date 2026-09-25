@@ -369,8 +369,4 @@ Repository layout:
 | `scripts/conformance/` | Probe that drives the real Hermes transport against a running WhatRouter. |
 | `docs/DESIGN.md` | Authoritative architecture and wire-protocol spec. |
 
-The code landed in five work packages — scaffold and config, relay core, WhatsApp adapter, router
-and wiring plus conformance, and finally packaging and docs — each built and reviewed on its own
-branch.
-
 MIT licensed. See [LICENSE](LICENSE).
