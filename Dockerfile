@@ -49,7 +49,9 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
+# husky is a devDependency and its prepare hook must not break the
+# production install (the git hooks it installs are useless in the image).
+RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/config.example.yaml ./config.example.yaml
