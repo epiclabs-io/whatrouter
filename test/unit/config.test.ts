@@ -52,7 +52,7 @@ describe("defaults", () => {
     expect(config.dataDir).toBe("./data");
     expect(config.logLevel).toBe("info");
     expect(config.whatsapp).toEqual({
-      editStreaming: false,
+      editStreaming: true,
       sendReadReceipts: false,
       chunkDelayMs: 300,
       sendTimeoutMs: 60000,
