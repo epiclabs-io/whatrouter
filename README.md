@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.jpg" alt="WhatRouter logo" width="220">
+</p>
+
 # WhatRouter
 
 WhatRouter is a [Hermes Agent](https://github.com/NousResearch/hermes-agent) **Relay connector for
