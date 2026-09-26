@@ -13,8 +13,8 @@
  *    another `*`, so `**bold**` survives the italic pass untouched.
  */
 
-const PLACEHOLDER_PREFIX = '\u0000';
-const PLACEHOLDER_SUFFIX = '\u0000';
+const PLACEHOLDER_PREFIX = "\u0000";
+const PLACEHOLDER_SUFFIX = "\u0000";
 
 const FENCED_CODE_RE = /```[\s\S]*?```/g;
 const INLINE_CODE_RE = /`[^`\n]*`/g;
@@ -31,10 +31,10 @@ const BOLD_UNDERSCORE_RE = /__(?=\S)([\s\S]*?\S)__/g;
 /** A heading is bold as a whole, so inner emphasis markers are dropped. */
 function stripEmphasis(text: string): string {
   return text
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/__(.+?)__/g, '$1')
-    .replace(/\*(.+?)\*/g, '$1')
-    .replace(/(?<![\w])_(.+?)_(?![\w])/g, '$1');
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/(?<![\w])_(.+?)_(?![\w])/g, "$1");
 }
 
 class Stash {
@@ -59,7 +59,9 @@ class Stash {
 }
 
 export function markdownToWhatsApp(input: string): string {
-  if (input === '') return '';
+  if (input === "") {
+    return "";
+  }
   const stash = new Stash();
 
   // 1. Code first: everything inside it is off limits.
@@ -69,12 +71,12 @@ export function markdownToWhatsApp(input: string): string {
   // 2. Headings become bold lines; inner emphasis markers are dropped so we never
   //    produce `*The *big* one*`. The result is stashed: it is already WA syntax.
   text = text.replace(HEADER_RE, (_whole, _hashes: string, body: string) =>
-    stash.keep(`*${stripEmphasis(body).trim()}*`),
+    stash.keep(`*${stripEmphasis(body).trim()}*`)
   );
 
   // 3. Links, bullets: structural rewrites.
   text = text.replace(LINK_RE, (_whole, label: string, url: string) =>
-    label.trim() === '' ? url : `${label} (${url})`,
+    label.trim() === "" ? url : `${label} (${url})`
   );
   text = text.replace(BULLET_RE, (_whole, indent: string) => `${indent}• `);
 

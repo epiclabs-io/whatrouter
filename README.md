@@ -7,7 +7,7 @@
 WhatRouter is a [Hermes Agent](https://github.com/NousResearch/hermes-agent) **Relay connector for
 WhatsApp**. It owns one WhatsApp account — a dedicated bot number, linked once with a QR code or a
 pairing code — and multiplexes it to any number of Hermes instances, using a static YAML file to
-decide which chat belongs to which instance. Each instance is a *profile* with its own
+decide which chat belongs to which instance. Each instance is a _profile_ with its own
 `gateway_id` and secret; routes bind DMs (by phone number) and groups (by JID) to exactly one
 profile. Messages for an instance that is offline are buffered durably and replayed, in order and
 exactly once, when it comes back.
@@ -138,12 +138,12 @@ hermes gateway restart
 
 That appends exactly four lines:
 
-| Line | Meaning |
-|---|---|
-| `GATEWAY_RELAY_URL=wss://whatrouter.example.com/relay` | Where the gateway dials. Derived from `public_url`; falls back to `ws://localhost:8466/relay`. |
-| `GATEWAY_RELAY_ID=gw-work` | The profile's `gateway_id`. Identifies which profile is connecting. |
-| `GATEWAY_RELAY_SECRET=<32+ chars>` | The shared secret that signs the bearer token. Setting it also stops Hermes from trying to self-provision. |
-| `GATEWAY_RELAY_PLATFORMS=whatsapp` | The platforms this gateway fronts through the relay. |
+| Line                                                   | Meaning                                                                                                    |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `GATEWAY_RELAY_URL=wss://whatrouter.example.com/relay` | Where the gateway dials. Derived from `public_url`; falls back to `ws://localhost:8466/relay`.             |
+| `GATEWAY_RELAY_ID=gw-work`                             | The profile's `gateway_id`. Identifies which profile is connecting.                                        |
+| `GATEWAY_RELAY_SECRET=<32+ chars>`                     | The shared secret that signs the bearer token. Setting it also stops Hermes from trying to self-provision. |
+| `GATEWAY_RELAY_PLATFORMS=whatsapp`                     | The platforms this gateway fronts through the relay.                                                       |
 
 If Hermes runs on another host, run the `env` command on the WhatRouter host and copy the four
 lines across — that is the only place the secret exists.
@@ -186,43 +186,43 @@ or bad usage.
 
 Top level:
 
-| Key | Type | Default | Meaning |
-|---|---|---|---|
-| `listen` | `host:port` | `0.0.0.0:8466` | Address the HTTP/WebSocket server binds. |
-| `public_url` | http(s) URL or null | null | Base URL Hermes dials and media URLs are built from. Without it everything falls back to `http://localhost:<port>` — fine on one host, broken everywhere else. |
-| `data_dir` | path | `./data` | Holds `wa-auth/`, `whatrouter.sqlite`, `media/`. The example sets `/data` (the Docker volume); use a relative path when running with Node. |
-| `log_level` | `trace`…`fatal` | `info` | Overridden by `$WHATROUTER_LOG_LEVEL`. |
-| `whatsapp.edit_streaming` | bool | `false` | Let the agent stream by editing its message; also flips `supports_edit` in the descriptor. Off by default: WhatsApp labels edited messages and rapid edits are a good way to look like a bot. |
-| `whatsapp.send_read_receipts` | bool | `false` | Mark routed incoming messages as read. |
-| `whatsapp.chunk_delay_ms` | int >= 0 | `300` | Pause between chunks of a long reply. |
-| `whatsapp.send_timeout_ms` | int > 0 | `60000` | Per-send timeout before an op fails. |
-| `buffer.max_age_seconds` | int > 0 | `1209600` (14 d) | Unacked buffered events older than this are purged hourly. |
-| `buffer.wake_cooldown_seconds` | int >= 0 | `60` | Minimum gap between `wake_url` pokes for one profile. |
-| `media.max_bytes` | int > 0 | `26214400` (25 MiB) | Cap on stored and uploaded media. |
-| `media.retention_seconds` | int > 0 | `604800` (7 d) | How long re-hosted media stays fetchable. |
-| `default_profile` | profile name or null | null | Profile that receives chats no route matches. Null means drop them (fail-closed). |
-| `allow_unrouted_outbound` | bool | `false` | Let a profile send to chats not routed to it. Leave it false unless you know why you need it. |
-| `profiles` | map | — | At least one. The key is the profile name used by `whatrouter env <name>`. |
+| Key                            | Type                 | Default             | Meaning                                                                                                                                                                                       |
+| ------------------------------ | -------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `listen`                       | `host:port`          | `0.0.0.0:8466`      | Address the HTTP/WebSocket server binds.                                                                                                                                                      |
+| `public_url`                   | http(s) URL or null  | null                | Base URL Hermes dials and media URLs are built from. Without it everything falls back to `http://localhost:<port>` — fine on one host, broken everywhere else.                                |
+| `data_dir`                     | path                 | `./data`            | Holds `wa-auth/`, `whatrouter.sqlite`, `media/`. The example sets `/data` (the Docker volume); use a relative path when running with Node.                                                    |
+| `log_level`                    | `trace`…`fatal`      | `info`              | Overridden by `$WHATROUTER_LOG_LEVEL`.                                                                                                                                                        |
+| `whatsapp.edit_streaming`      | bool                 | `false`             | Let the agent stream by editing its message; also flips `supports_edit` in the descriptor. Off by default: WhatsApp labels edited messages and rapid edits are a good way to look like a bot. |
+| `whatsapp.send_read_receipts`  | bool                 | `false`             | Mark routed incoming messages as read.                                                                                                                                                        |
+| `whatsapp.chunk_delay_ms`      | int >= 0             | `300`               | Pause between chunks of a long reply.                                                                                                                                                         |
+| `whatsapp.send_timeout_ms`     | int > 0              | `60000`             | Per-send timeout before an op fails.                                                                                                                                                          |
+| `buffer.max_age_seconds`       | int > 0              | `1209600` (14 d)    | Unacked buffered events older than this are purged hourly.                                                                                                                                    |
+| `buffer.wake_cooldown_seconds` | int >= 0             | `60`                | Minimum gap between `wake_url` pokes for one profile.                                                                                                                                         |
+| `media.max_bytes`              | int > 0              | `26214400` (25 MiB) | Cap on stored and uploaded media.                                                                                                                                                             |
+| `media.retention_seconds`      | int > 0              | `604800` (7 d)      | How long re-hosted media stays fetchable.                                                                                                                                                     |
+| `default_profile`              | profile name or null | null                | Profile that receives chats no route matches. Null means drop them (fail-closed).                                                                                                             |
+| `allow_unrouted_outbound`      | bool                 | `false`             | Let a profile send to chats not routed to it. Leave it false unless you know why you need it.                                                                                                 |
+| `profiles`                     | map                  | —                   | At least one. The key is the profile name used by `whatrouter env <name>`.                                                                                                                    |
 
 Per profile (`profiles.<name>`):
 
-| Key | Type | Default | Meaning |
-|---|---|---|---|
-| `gateway_id` | string | required | Must match `GATEWAY_RELAY_ID`. Unique across profiles. |
-| `secret` | string >= 32 chars | required unless `secret_file` | Must match `GATEWAY_RELAY_SECRET`. Unique across profiles. |
-| `secret_file` | path | — | Read the secret from a file instead (contents trimmed). Mutually exclusive with `secret`. |
-| `display_name` | string or null | null | Human label for logs. |
-| `wake_url` | http(s) URL or null | null | Poked with a bare GET when a message arrives while the instance is offline. |
-| `routes` | list | `[]` | Chats this profile owns. A profile with no routes is a warning, not an error. |
+| Key            | Type                | Default                       | Meaning                                                                                   |
+| -------------- | ------------------- | ----------------------------- | ----------------------------------------------------------------------------------------- |
+| `gateway_id`   | string              | required                      | Must match `GATEWAY_RELAY_ID`. Unique across profiles.                                    |
+| `secret`       | string >= 32 chars  | required unless `secret_file` | Must match `GATEWAY_RELAY_SECRET`. Unique across profiles.                                |
+| `secret_file`  | path                | —                             | Read the secret from a file instead (contents trimmed). Mutually exclusive with `secret`. |
+| `display_name` | string or null      | null                          | Human label for logs.                                                                     |
+| `wake_url`     | http(s) URL or null | null                          | Poked with a bare GET when a message arrives while the instance is offline.               |
+| `routes`       | list                | `[]`                          | Chats this profile owns. A profile with no routes is a warning, not an error.             |
 
 Per route — exactly one of `dm` or `group`:
 
-| Key | Applies to | Meaning |
-|---|---|---|
-| `dm` | DM | A phone number or user JID. Accepted forms: `+34600000000`, `34600000000`, `34600000000@s.whatsapp.net`, `<digits>@lid`. |
-| `group` | group | The group JID, `<digits>@g.us`. WhatsApp groups have no other stable id. |
-| `require_mention` | group | Only deliver messages that address the bot. Default true. |
-| `allowed_senders` | group | If present, only these senders' messages are delivered. Same forms as `dm`. |
+| Key               | Applies to | Meaning                                                                                                                  |
+| ----------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `dm`              | DM         | A phone number or user JID. Accepted forms: `+34600000000`, `34600000000`, `34600000000@s.whatsapp.net`, `<digits>@lid`. |
+| `group`           | group      | The group JID, `<digits>@g.us`. WhatsApp groups have no other stable id.                                                 |
+| `require_mention` | group      | Only deliver messages that address the bot. Default true.                                                                |
+| `allowed_senders` | group      | If present, only these senders' messages are delivered. Same forms as `dm`.                                              |
 
 A group message is delivered when `require_mention` is off, **or** the text starts with `/`, **or**
 the bot is @mentioned, **or** the message is a reply to the bot. The setting is resolved route
@@ -235,11 +235,11 @@ value from a path — a Docker or Kubernetes secret mount, for example.
 
 `data_dir` layout:
 
-| Path | Contents |
-|---|---|
-| `wa-auth/` | Baileys credentials and signal keys. **Full access to the WhatsApp account.** |
-| `whatrouter.sqlite` (+ `-wal`, `-shm`) | Inbound buffer, idle flips, gateway policies, media index. |
-| `media/` | Re-hosted inbound media, served from `/relay/media/<id>`. |
+| Path                                   | Contents                                                                      |
+| -------------------------------------- | ----------------------------------------------------------------------------- |
+| `wa-auth/`                             | Baileys credentials and signal keys. **Full access to the WhatsApp account.** |
+| `whatrouter.sqlite` (+ `-wal`, `-shm`) | Inbound buffer, idle flips, gateway policies, media index.                    |
+| `media/`                               | Re-hosted inbound media, served from `/relay/media/<id>`.                     |
 
 `check-config` reports every problem at once, not just the first: duplicate `gateway_id`, a secret
 under 32 characters or shared by two profiles, `secret` and `secret_file` both set, a chat routed
@@ -274,7 +274,7 @@ threads (`supports_threads: false`), draft streaming, polls, and — unless you 
   "status": "ok",
   "whatsapp": "connected",
   "profiles": {
-    "work": { "connected": true,  "buffered": 0 },
+    "work": { "connected": true, "buffered": 0 },
     "home": { "connected": false, "buffered": 3 }
   }
 }
@@ -321,21 +321,21 @@ restarted with the new secret; other profiles are unaffected, and its messages a
 
 ## Troubleshooting
 
-| Symptom | Cause and fix |
-|---|---|
-| Gateway logs close code `4401 unauthorized` | `GATEWAY_RELAY_ID` or `GATEWAY_RELAY_SECRET` matches no profile. Compare against `whatrouter env <profile>`; trailing whitespace in the `.env` value counts. |
-| Close code `4401` with reason `expired` | Only the token's expiry failed: the two machines' clocks differ by more than ~5 minutes. Fix NTP on both; the gateway then reconnects by itself. |
-| Hermes says auth was revoked and stops reconnecting | Hermes latches after a post-handshake 4401 on purpose, so a wrong secret cannot hammer the connector. Fix the secret, then `hermes gateway restart`; WhatRouter alone cannot unlatch it. |
-| Close code `1008 duplicate session` | Two Hermes instances share a `gateway_id`. The *new* connection is refused, not the live one. Give each instance its own profile. |
-| In Docker: `EACCES: permission denied, mkdir 'data'` | `data_dir` is relative, so it resolves under `/app`, which the unprivileged `node` user cannot write. Set `data_dir: /data` — the volume. |
-| `serve` exits 2 with a `whatrouter pair` hint | The WhatsApp account is not linked in this `data_dir`. Run `docker compose run --rm -it whatrouter pair` once, then start again — and check both commands use the same volume. |
-| Logs say the session was logged out; state is `unpaired` | The linked device was removed from the phone, or WhatsApp invalidated it. Delete `<data_dir>/wa-auth` and pair again. |
-| Messages from one contact never arrive | Their chat id is a LID (`<digits>@lid`), not a phone JID — common for first contact and privacy-enabled accounts, and the LID digits are unrelated to the phone number. Find the `unrouted chat dropped` log line, copy the id it prints, and add it as a `dm:` route. |
-| The bot ignores a group | Mention gating. @mention it, reply to one of its messages, start the line with `/`, or set `require_mention: false` on that route. Check `allowed_senders` too, if you set it. |
-| Nothing arrives and nothing is buffered | The chat matches no route and `default_profile` is null, so it is dropped by design. Add a route or set `default_profile`. |
-| Hermes cannot fetch media (`localhost` URLs, timeouts) | `public_url` is unset or wrong, so media URLs point at WhatRouter's own localhost. Set it to an address the Hermes host can reach, then restart. |
-| Media upload rejected | Larger than `media.max_bytes` (25 MiB by default), which is also close to WhatsApp's own limit. |
-| `check-config` prints `error: <path>: ...` | One line per problem, each with its config path. Exit code 2 also covers unknown commands and bad flags. |
+| Symptom                                                  | Cause and fix                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gateway logs close code `4401 unauthorized`              | `GATEWAY_RELAY_ID` or `GATEWAY_RELAY_SECRET` matches no profile. Compare against `whatrouter env <profile>`; trailing whitespace in the `.env` value counts.                                                                                                           |
+| Close code `4401` with reason `expired`                  | Only the token's expiry failed: the two machines' clocks differ by more than ~5 minutes. Fix NTP on both; the gateway then reconnects by itself.                                                                                                                       |
+| Hermes says auth was revoked and stops reconnecting      | Hermes latches after a post-handshake 4401 on purpose, so a wrong secret cannot hammer the connector. Fix the secret, then `hermes gateway restart`; WhatRouter alone cannot unlatch it.                                                                               |
+| Close code `1008 duplicate session`                      | Two Hermes instances share a `gateway_id`. The _new_ connection is refused, not the live one. Give each instance its own profile.                                                                                                                                      |
+| In Docker: `EACCES: permission denied, mkdir 'data'`     | `data_dir` is relative, so it resolves under `/app`, which the unprivileged `node` user cannot write. Set `data_dir: /data` — the volume.                                                                                                                              |
+| `serve` exits 2 with a `whatrouter pair` hint            | The WhatsApp account is not linked in this `data_dir`. Run `docker compose run --rm -it whatrouter pair` once, then start again — and check both commands use the same volume.                                                                                         |
+| Logs say the session was logged out; state is `unpaired` | The linked device was removed from the phone, or WhatsApp invalidated it. Delete `<data_dir>/wa-auth` and pair again.                                                                                                                                                  |
+| Messages from one contact never arrive                   | Their chat id is a LID (`<digits>@lid`), not a phone JID — common for first contact and privacy-enabled accounts, and the LID digits are unrelated to the phone number. Find the `unrouted chat dropped` log line, copy the id it prints, and add it as a `dm:` route. |
+| The bot ignores a group                                  | Mention gating. @mention it, reply to one of its messages, start the line with `/`, or set `require_mention: false` on that route. Check `allowed_senders` too, if you set it.                                                                                         |
+| Nothing arrives and nothing is buffered                  | The chat matches no route and `default_profile` is null, so it is dropped by design. Add a route or set `default_profile`.                                                                                                                                             |
+| Hermes cannot fetch media (`localhost` URLs, timeouts)   | `public_url` is unset or wrong, so media URLs point at WhatRouter's own localhost. Set it to an address the Hermes host can reach, then restart.                                                                                                                       |
+| Media upload rejected                                    | Larger than `media.max_bytes` (25 MiB by default), which is also close to WhatsApp's own limit.                                                                                                                                                                        |
+| `check-config` prints `error: <path>: ...`               | One line per problem, each with its config path. Exit code 2 also covers unknown commands and bad flags.                                                                                                                                                               |
 
 ## Development
 
@@ -361,16 +361,16 @@ key.
 
 Repository layout:
 
-| Path | Contents |
-|---|---|
-| `src/config/` | YAML schema (zod), `${ENV}` interpolation, validation. |
-| `src/relay/` | HTTP/WebSocket server, HMAC auth, NDJSON frames, session state machine, descriptor. |
-| `src/router/` | Route table, relevance gating, tenant checks, event mapping. |
-| `src/store/` | `node:sqlite`: buffer, idle flips, policies, media index. |
-| `src/whatsapp/` | Baileys client, pairing, JID handling, normalization, markdown, chunking, fake port. |
-| `src/util/` | Logging. |
-| `test/` | Vitest unit and integration tests, plus recorded Baileys fixtures. |
-| `scripts/conformance/` | Probe that drives the real Hermes transport against a running WhatRouter. |
-| `docs/DESIGN.md` | Authoritative architecture and wire-protocol spec. |
+| Path                   | Contents                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| `src/config/`          | YAML schema (zod), `${ENV}` interpolation, validation.                               |
+| `src/relay/`           | HTTP/WebSocket server, HMAC auth, NDJSON frames, session state machine, descriptor.  |
+| `src/router/`          | Route table, relevance gating, tenant checks, event mapping.                         |
+| `src/store/`           | `node:sqlite`: buffer, idle flips, policies, media index.                            |
+| `src/whatsapp/`        | Baileys client, pairing, JID handling, normalization, markdown, chunking, fake port. |
+| `src/util/`            | Logging.                                                                             |
+| `test/`                | Vitest unit and integration tests, plus recorded Baileys fixtures.                   |
+| `scripts/conformance/` | Probe that drives the real Hermes transport against a running WhatRouter.            |
+| `docs/DESIGN.md`       | Authoritative architecture and wire-protocol spec.                                   |
 
 MIT licensed. See [LICENSE](LICENSE).

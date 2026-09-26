@@ -4,10 +4,10 @@
  *
  * Nothing here touches the network; the only filesystem writes go to a temp dir.
  */
-import { EventEmitter } from 'node:events';
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { EventEmitter } from "node:events";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   BufferJSON,
   initAuthCreds,
@@ -17,31 +17,31 @@ import {
   type WAMessage,
   type WAMessageKey,
   type WAPresence,
-} from '@whiskeysockets/baileys';
-import { readFileSync } from 'node:fs';
-import type { Config } from '../../src/config/schema.js';
-import { createLogger, type Logger } from '../../src/util/log.js';
-import type { SocketLike } from '../../src/whatsapp/baileys-client.js';
+} from "@whiskeysockets/baileys";
+import { readFileSync } from "node:fs";
+import type { Config } from "../../src/config/schema.js";
+import { createLogger, type Logger } from "../../src/util/log.js";
+import type { SocketLike } from "../../src/whatsapp/baileys-client.js";
 
-export const BOT_PN = '34600000099@s.whatsapp.net';
-export const BOT_LID = '111222333444555@lid';
+export const BOT_PN = "34600000099@s.whatsapp.net";
+export const BOT_LID = "111222333444555@lid";
 export const BOT_IDS = [BOT_PN, BOT_LID];
 
 export function fixture(name: string): WAMessage {
   const url = new URL(`../fixtures/baileys/${name}.json`, import.meta.url);
-  return JSON.parse(readFileSync(url, 'utf8')) as WAMessage;
+  return JSON.parse(readFileSync(url, "utf8")) as WAMessage;
 }
 
 export function silentLog(): Logger {
-  return createLogger({ level: 'silent' });
+  return createLogger({ level: "silent" });
 }
 
-export function testConfig(overrides: Partial<Config['whatsapp']> = {}): Config {
+export function testConfig(overrides: Partial<Config["whatsapp"]> = {}): Config {
   return {
-    listen: { host: '127.0.0.1', port: 8466 },
+    listen: { host: "127.0.0.1", port: 8466 },
     publicUrl: null,
-    dataDir: '/nonexistent',
-    logLevel: 'info',
+    dataDir: "/nonexistent",
+    logLevel: "info",
     whatsapp: {
       editStreaming: false,
       sendReadReceipts: false,
@@ -103,7 +103,7 @@ export function createFakeSocket(opts: FakeSocketOptions = {}): FakeSocket {
       user = next;
     },
     socket: {
-      ev: ev as unknown as SocketLike['ev'],
+      ev: ev as unknown as SocketLike["ev"],
       get user() {
         return user;
       },
@@ -118,7 +118,7 @@ export function createFakeSocket(opts: FakeSocketOptions = {}): FakeSocket {
         const id = queuedIds.shift() ?? `sent-${counter}`;
         return {
           key: { remoteJid: jid, fromMe: true, id },
-          message: { conversation: 'outbound' },
+          message: { conversation: "outbound" },
           messageTimestamp: 1758000000,
         } as WAMessage;
       },
@@ -131,7 +131,7 @@ export function createFakeSocket(opts: FakeSocketOptions = {}): FakeSocket {
       async groupMetadata(jid): Promise<GroupMetadata> {
         return {
           id: jid,
-          subject: opts.groupSubject ?? 'Test Group',
+          subject: opts.groupSubject ?? "Test Group",
           owner: undefined,
           participants: [],
         } as unknown as GroupMetadata;
@@ -141,7 +141,7 @@ export function createFakeSocket(opts: FakeSocketOptions = {}): FakeSocket {
       },
       async requestPairingCode(phoneNumber): Promise<string> {
         pairingRequests.push(phoneNumber);
-        return opts.pairingCode ?? 'ABCD1234';
+        return opts.pairingCode ?? "ABCD1234";
       },
       async end(): Promise<void> {
         state.ended += 1;
@@ -154,16 +154,20 @@ export function createFakeSocket(opts: FakeSocketOptions = {}): FakeSocket {
 
 /** A temp dir with credentials that look like a completed pairing. */
 export async function makeRegisteredAuthDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'whatrouter-auth-'));
+  const dir = await mkdtemp(join(tmpdir(), "whatrouter-auth-"));
   const creds = initAuthCreds();
   creds.registered = true;
-  creds.me = { id: '34600000099:12@s.whatsapp.net', lid: '111222333444555:12@lid', name: 'WhatRouter' };
-  await writeFile(join(dir, 'creds.json'), JSON.stringify(creds, BufferJSON.replacer));
+  creds.me = {
+    id: "34600000099:12@s.whatsapp.net",
+    lid: "111222333444555:12@lid",
+    name: "WhatRouter",
+  };
+  await writeFile(join(dir, "creds.json"), JSON.stringify(creds, BufferJSON.replacer));
   return dir;
 }
 
 export async function makeEmptyAuthDir(): Promise<string> {
-  return await mkdtemp(join(tmpdir(), 'whatrouter-auth-'));
+  return await mkdtemp(join(tmpdir(), "whatrouter-auth-"));
 }
 
 export interface CapturedIo {

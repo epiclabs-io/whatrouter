@@ -8,8 +8,8 @@
  * cleared only when the buffer has drained to empty, atomically with that
  * check, so an event appended in the same instant cannot be lost to live mode.
  */
-import type { DatabaseSync } from 'node:sqlite';
-import type { RelayEvent } from '../relay/frames.js';
+import type { DatabaseSync } from "node:sqlite";
+import type { RelayEvent } from "../relay/frames.js";
 
 export interface BufferedEvent {
   seq: number;
@@ -36,20 +36,20 @@ export interface BufferStore {
 }
 
 export function createBufferStore(db: DatabaseSync): BufferStore {
-  const insert = db.prepare('INSERT INTO buffer(profile, event, created_at) VALUES(?, ?, ?)');
+  const insert = db.prepare("INSERT INTO buffer(profile, event, created_at) VALUES(?, ?, ?)");
   const selectNext = db.prepare(
-    'SELECT seq, event FROM buffer WHERE profile = ? ORDER BY seq ASC LIMIT 1',
+    "SELECT seq, event FROM buffer WHERE profile = ? ORDER BY seq ASC LIMIT 1"
   );
-  const deleteRow = db.prepare('DELETE FROM buffer WHERE profile = ? AND seq = ?');
-  const countRows = db.prepare('SELECT COUNT(*) AS n FROM buffer WHERE profile = ?');
-  const purge = db.prepare('DELETE FROM buffer WHERE created_at < ?');
-  const distinctProfiles = db.prepare('SELECT DISTINCT profile FROM buffer');
+  const deleteRow = db.prepare("DELETE FROM buffer WHERE profile = ? AND seq = ?");
+  const countRows = db.prepare("SELECT COUNT(*) AS n FROM buffer WHERE profile = ?");
+  const purge = db.prepare("DELETE FROM buffer WHERE created_at < ?");
+  const distinctProfiles = db.prepare("SELECT DISTINCT profile FROM buffer");
 
   const upsertFlip = db.prepare(
     `INSERT INTO flips(profile, buffered_only) VALUES(?, ?)
-       ON CONFLICT(profile) DO UPDATE SET buffered_only = excluded.buffered_only`,
+       ON CONFLICT(profile) DO UPDATE SET buffered_only = excluded.buffered_only`
   );
-  const selectFlip = db.prepare('SELECT buffered_only FROM flips WHERE profile = ?');
+  const selectFlip = db.prepare("SELECT buffered_only FROM flips WHERE profile = ?");
 
   function countOf(profile: string): number {
     const row = countRows.get(profile) as { n?: number } | undefined;
@@ -57,14 +57,14 @@ export function createBufferStore(db: DatabaseSync): BufferStore {
   }
 
   function transaction<T>(fn: () => T): T {
-    db.exec('BEGIN IMMEDIATE');
+    db.exec("BEGIN IMMEDIATE");
     try {
       const result = fn();
-      db.exec('COMMIT');
+      db.exec("COMMIT");
       return result;
     } catch (err) {
       try {
-        db.exec('ROLLBACK');
+        db.exec("ROLLBACK");
       } catch {
         /* the transaction was already rolled back */
       }
@@ -82,7 +82,9 @@ export function createBufferStore(db: DatabaseSync): BufferStore {
 
     nextUnacked(profile) {
       const row = selectNext.get(profile) as { seq?: number; event?: string } | undefined;
-      if (row?.seq === undefined || row.event === undefined) return null;
+      if (row?.seq === undefined || row.event === undefined) {
+        return null;
+      }
       try {
         return { seq: Number(row.seq), event: JSON.parse(row.event) as RelayEvent };
       } catch {
@@ -109,7 +111,9 @@ export function createBufferStore(db: DatabaseSync): BufferStore {
 
     clearFlipIfEmpty(profile) {
       return transaction(() => {
-        if (countOf(profile) > 0) return false;
+        if (countOf(profile) > 0) {
+          return false;
+        }
         upsertFlip.run(profile, 0);
         return true;
       });
@@ -123,7 +127,7 @@ export function createBufferStore(db: DatabaseSync): BufferStore {
     profiles() {
       return (distinctProfiles.all() as Array<{ profile?: string }>)
         .map((r) => r.profile)
-        .filter((p): p is string => typeof p === 'string');
+        .filter((p): p is string => typeof p === "string");
     },
   };
 }

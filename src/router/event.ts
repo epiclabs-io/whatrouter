@@ -7,42 +7,44 @@
  * `media[i].url` MUST also appear in `media_urls` (the gateway resolves the mime
  * type by URL lookup, not by position).
  */
-import { digitsOf } from '../whatsapp/jid.js';
-import { isCommandText } from './relevance.js';
-import type { RelayEvent, RelayMediaItem, RelayMessageType } from '../relay/frames.js';
-import type { InboundMessage, MessageKind } from '../whatsapp/port.js';
+import { digitsOf } from "../whatsapp/jid.js";
+import { isCommandText } from "./relevance.js";
+import type { RelayEvent, RelayMediaItem, RelayMessageType } from "../relay/frames.js";
+import type { InboundMessage, MessageKind } from "../whatsapp/port.js";
 
 /** A stored, re-hosted attachment: what the gateway will fetch back from us. */
 export interface EventMedia {
   url: string;
-  kind: RelayMediaItem['kind'];
+  kind: RelayMediaItem["kind"];
   mime: string;
   size: number;
   filename?: string | undefined;
   caption?: string | undefined;
 }
 
-const MESSAGE_TYPE_BY_KIND: Record<Exclude<MessageKind, 'text'>, RelayMessageType> = {
-  image: 'photo',
-  video: 'video',
-  voice: 'voice',
-  audio: 'audio',
-  document: 'document',
-  sticker: 'sticker',
-  location: 'location',
+const MESSAGE_TYPE_BY_KIND: Record<Exclude<MessageKind, "text">, RelayMessageType> = {
+  image: "photo",
+  video: "video",
+  voice: "voice",
+  audio: "audio",
+  document: "document",
+  sticker: "sticker",
+  location: "location",
   // Anything we could not classify still reaches the agent as plain text.
-  other: 'text',
+  other: "text",
 };
 
 export function messageTypeFor(m: InboundMessage): RelayMessageType {
-  if (m.kind === 'text') return isCommandText(m.text) ? 'command' : 'text';
+  if (m.kind === "text") {
+    return isCommandText(m.text) ? "command" : "text";
+  }
   return MESSAGE_TYPE_BY_KIND[m.kind];
 }
 
 /** `34600000000@s.whatsapp.net` -> `34600000000`; keeps the JID if it has no digits. */
 function authorOf(senderId: string): string {
   const digits = digitsOf(senderId);
-  return digits === '' ? senderId : digits;
+  return digits === "" ? senderId : digits;
 }
 
 export function toRelayEvent(m: InboundMessage, media: EventMedia | null): RelayEvent {
@@ -54,8 +56,12 @@ export function toRelayEvent(m: InboundMessage, media: EventMedia | null): Relay
           kind: media.kind,
           mime: media.mime,
           size: media.size,
-          ...(media.filename === undefined || media.filename === '' ? {} : { filename: media.filename }),
-          ...(media.caption === undefined || media.caption === '' ? {} : { caption: media.caption }),
+          ...(media.filename === undefined || media.filename === ""
+            ? {}
+            : { filename: media.filename }),
+          ...(media.caption === undefined || media.caption === ""
+            ? {}
+            : { caption: media.caption }),
         };
 
   return {
@@ -73,7 +79,7 @@ export function toRelayEvent(m: InboundMessage, media: EventMedia | null): Relay
           },
     ...(mediaItem === null ? {} : { media_urls: [mediaItem.url], media: [mediaItem] }),
     source: {
-      platform: 'whatsapp',
+      platform: "whatsapp",
       chat_id: m.chatId,
       chat_type: m.chatType,
       chat_name: m.chatName,
@@ -81,8 +87,8 @@ export function toRelayEvent(m: InboundMessage, media: EventMedia | null): Relay
       user_name: m.senderName,
       thread_id: null,
       chat_topic: null,
-      ...(m.senderIdAlt === null || m.senderIdAlt === '' ? {} : { user_id_alt: m.senderIdAlt }),
-      ...(m.chatIdRaw === m.chatId || m.chatIdRaw === '' ? {} : { chat_id_alt: m.chatIdRaw }),
+      ...(m.senderIdAlt === null || m.senderIdAlt === "" ? {} : { user_id_alt: m.senderIdAlt }),
+      ...(m.chatIdRaw === m.chatId || m.chatIdRaw === "" ? {} : { chat_id_alt: m.chatIdRaw }),
       message_id: m.messageId,
     },
   };

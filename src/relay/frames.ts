@@ -4,7 +4,7 @@
  * the line assembler and the session state machine live in WP2.
  */
 
-export type ChatKind = 'dm' | 'group';
+export type ChatKind = "dm" | "group";
 
 // ---------------------------------------------------------------- descriptor
 
@@ -18,7 +18,7 @@ export interface CapabilityDescriptor {
   supports_threads: boolean;
   /** Anything other than "" / "plain" tells the gateway code blocks are safe. */
   markdown_dialect: string;
-  len_unit: 'chars' | 'utf16';
+  len_unit: "chars" | "utf16";
   emoji: string;
   platform_hint: string;
   pii_safe: boolean;
@@ -32,7 +32,7 @@ export interface CapabilityDescriptor {
 export interface RelayMediaItem {
   /** MUST also appear in `media_urls`; the gateway resolves mime by URL lookup. */
   url: string;
-  kind: 'image' | 'voice' | 'audio' | 'video' | 'document' | 'sticker';
+  kind: "image" | "voice" | "audio" | "video" | "document" | "sticker";
   mime: string;
   size: number;
   filename?: string;
@@ -56,15 +56,7 @@ export interface RelaySource {
 }
 
 export type RelayMessageType =
-  | 'text'
-  | 'command'
-  | 'photo'
-  | 'video'
-  | 'audio'
-  | 'voice'
-  | 'document'
-  | 'sticker'
-  | 'location';
+  "text" | "command" | "photo" | "video" | "audio" | "voice" | "document" | "sticker" | "location";
 
 /** Consumed by the gateway's `_event_from_wire`. */
 export interface RelayEvent {
@@ -81,7 +73,7 @@ export interface RelayEvent {
 // ------------------------------------------------------------ outbound actions
 
 export interface SendAction {
-  op: 'send';
+  op: "send";
   chat_id: string;
   content: string;
   reply_to?: string | null;
@@ -89,27 +81,27 @@ export interface SendAction {
 }
 
 export interface EditAction {
-  op: 'edit';
+  op: "edit";
   chat_id: string;
   message_id: string;
   content: string;
 }
 
 export interface DeleteAction {
-  op: 'delete';
+  op: "delete";
   chat_id: string;
   message_id: string;
 }
 
 export interface TypingAction {
-  op: 'typing';
+  op: "typing";
   chat_id: string;
   /** `""` means "paused". */
   content?: string;
 }
 
 export interface ReactAction {
-  op: 'react';
+  op: "react";
   chat_id: string;
   message_id: string;
   emoji: string;
@@ -117,9 +109,9 @@ export interface ReactAction {
 }
 
 export interface SendMediaAction {
-  op: 'send_media';
+  op: "send_media";
   chat_id: string;
-  media_kind: 'image' | 'video' | 'voice' | 'audio' | 'document';
+  media_kind: "image" | "video" | "voice" | "audio" | "document";
   source_url: string;
   content?: string;
   filename?: string;
@@ -127,7 +119,7 @@ export interface SendMediaAction {
 }
 
 export interface GetChatInfoAction {
-  op: 'get_chat_info';
+  op: "get_chat_info";
   chat_id: string;
 }
 
@@ -158,7 +150,7 @@ export interface OutboundResult {
 // ------------------------------------------------------- gateway -> connector
 
 export interface HelloFrame {
-  type: 'hello';
+  type: "hello";
   platform: string;
   /** May be empty. */
   botId?: string;
@@ -166,7 +158,7 @@ export interface HelloFrame {
 }
 
 export interface OutboundFrame {
-  type: 'outbound';
+  type: "outbound";
   requestId: string;
   action: OutboundAction;
   platform?: string;
@@ -174,63 +166,62 @@ export interface OutboundFrame {
 }
 
 export interface InboundAckFrame {
-  type: 'inbound_ack';
+  type: "inbound_ack";
   bufferId: string;
 }
 
 export interface InterruptFrame {
-  type: 'interrupt';
+  type: "interrupt";
   session_key?: string;
   reason?: string;
 }
 
 export interface GoingIdleFrame {
-  type: 'going_idle';
+  type: "going_idle";
 }
 
 export type GatewayFrame =
-  | HelloFrame
-  | OutboundFrame
-  | InboundAckFrame
-  | InterruptFrame
-  | GoingIdleFrame;
+  HelloFrame | OutboundFrame | InboundAckFrame | InterruptFrame | GoingIdleFrame;
 
 // ------------------------------------------------------- connector -> gateway
 
 export interface DescriptorFrame {
-  type: 'descriptor';
+  type: "descriptor";
   descriptor: CapabilityDescriptor;
 }
 
 export interface InboundFrame {
-  type: 'inbound';
+  type: "inbound";
   event: RelayEvent;
   /** Present <=> replayed from the buffer and therefore ack-gated. */
   bufferId?: string;
 }
 
 export interface OutboundResultFrame {
-  type: 'outbound_result';
+  type: "outbound_result";
   requestId: string;
   result: OutboundResult;
 }
 
 export interface GoingIdleAckFrame {
-  type: 'going_idle_ack';
+  type: "going_idle_ack";
 }
 
 export type ConnectorFrame =
-  | DescriptorFrame
-  | InboundFrame
-  | OutboundResultFrame
-  | GoingIdleAckFrame;
+  DescriptorFrame | InboundFrame | OutboundResultFrame | GoingIdleAckFrame;
 
 export type RelayFrame = GatewayFrame | ConnectorFrame;
 
-const GATEWAY_FRAME_TYPES = new Set(['hello', 'outbound', 'inbound_ack', 'interrupt', 'going_idle']);
+const GATEWAY_FRAME_TYPES = new Set([
+  "hello",
+  "outbound",
+  "inbound_ack",
+  "interrupt",
+  "going_idle",
+]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 /**
@@ -238,17 +229,24 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * (the contract is additive-only), so this returns false rather than throwing.
  */
 export function isGatewayFrame(value: unknown): value is GatewayFrame {
-  if (!isRecord(value)) return false;
-  const type = value['type'];
-  if (typeof type !== 'string' || !GATEWAY_FRAME_TYPES.has(type)) return false;
+  if (!isRecord(value)) {
+    return false;
+  }
+  const type = value["type"];
+  if (typeof type !== "string" || !GATEWAY_FRAME_TYPES.has(type)) {
+    return false;
+  }
   switch (type) {
-    case 'hello':
-      return typeof value['platform'] === 'string';
-    case 'outbound':
-      return typeof value['requestId'] === 'string' && isRecord(value['action'])
-        && typeof value['action']['op'] === 'string';
-    case 'inbound_ack':
-      return typeof value['bufferId'] === 'string';
+    case "hello":
+      return typeof value["platform"] === "string";
+    case "outbound":
+      return (
+        typeof value["requestId"] === "string" &&
+        isRecord(value["action"]) &&
+        typeof value["action"]["op"] === "string"
+      );
+    case "inbound_ack":
+      return typeof value["bufferId"] === "string";
     default:
       return true;
   }

@@ -10,7 +10,7 @@
  * Plain Map-based LRU: Maps keep insertion order, so the oldest key is always the
  * first one `keys().next()` yields.
  */
-import type { WAMessage } from '@whiskeysockets/baileys';
+import type { WAMessage } from "@whiskeysockets/baileys";
 
 export const DEFAULT_STORE_LIMIT = 512;
 
@@ -29,7 +29,9 @@ export interface MessageStore {
 function trim(map: Map<string, unknown>, limit: number): void {
   while (map.size > limit) {
     const oldest = map.keys().next();
-    if (oldest.done === true) return;
+    if (oldest.done === true) {
+      return;
+    }
     map.delete(oldest.value);
   }
 }
@@ -42,7 +44,9 @@ export function createMessageStore(limit: number = DEFAULT_STORE_LIMIT): Message
   return {
     remember(msg: WAMessage): void {
       const id = msg.key?.id;
-      if (id === undefined || id === null || id === '') return;
+      if (id === undefined || id === null || id === "") {
+        return;
+      }
       messages.delete(id);
       messages.set(id, msg);
       trim(messages, max);
@@ -50,7 +54,9 @@ export function createMessageStore(limit: number = DEFAULT_STORE_LIMIT): Message
 
     get(id: string): WAMessage | undefined {
       const found = messages.get(id);
-      if (found === undefined) return undefined;
+      if (found === undefined) {
+        return undefined;
+      }
       // Touch: keep hot messages (a chat we are actively replying in) alive.
       messages.delete(id);
       messages.set(id, found);
@@ -58,7 +64,9 @@ export function createMessageStore(limit: number = DEFAULT_STORE_LIMIT): Message
     },
 
     rememberSentId(id: string): void {
-      if (id === '') return;
+      if (id === "") {
+        return;
+      }
       sentIds.delete(id);
       sentIds.set(id, true);
       trim(sentIds, max);

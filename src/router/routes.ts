@@ -13,9 +13,9 @@
  *    reply must then pass the outbound tenant check — so every chat we actually
  *    delivered is remembered (bounded, in memory) as belonging to that profile.
  */
-import { digitsOf, normalizeJid, phoneToJid } from '../whatsapp/jid.js';
-import type { Config, ProfileConfig, Route } from '../config/schema.js';
-import type { InboundMessage } from '../whatsapp/port.js';
+import { digitsOf, normalizeJid, phoneToJid } from "../whatsapp/jid.js";
+import type { Config, ProfileConfig, Route } from "../config/schema.js";
+import type { InboundMessage } from "../whatsapp/port.js";
 
 export interface RouteEntry {
   profile: ProfileConfig;
@@ -41,13 +41,17 @@ export class RouteTable extends Map<string, RouteEntry> {
   /** Called after an event was handed to a profile, so its reply is allowed back. */
   remember(chatId: string, profileName: string): void {
     const id = canonicalChatId(chatId);
-    if (id === '') return;
+    if (id === "") {
+      return;
+    }
     // Re-insert so this chat becomes the newest entry (insertion-ordered LRU).
     this.#delivered.delete(id);
     this.#delivered.set(id, profileName);
     while (this.#delivered.size > DELIVERED_MEMORY_MAX) {
       const oldest = this.#delivered.keys().next();
-      if (oldest.done === true) break;
+      if (oldest.done === true) {
+        break;
+      }
       this.#delivered.delete(oldest.value);
     }
   }
@@ -67,10 +71,14 @@ export class RouteTable extends Map<string, RouteEntry> {
  */
 export function canonicalChatId(raw: string | null | undefined): string {
   const jid = normalizeJid(raw);
-  if (jid === '') return '';
-  if (jid.includes('@')) return jid;
+  if (jid === "") {
+    return "";
+  }
+  if (jid.includes("@")) {
+    return jid;
+  }
   const digits = digitsOf(jid);
-  return digits === '' ? jid : phoneToJid(digits);
+  return digits === "" ? jid : phoneToJid(digits);
 }
 
 export function buildRouteTable(config: Config): RouteTable {
@@ -85,7 +93,9 @@ export function buildRouteTable(config: Config): RouteTable {
 }
 
 function defaultProfileOf(config: Config): ProfileConfig | null {
-  if (config.defaultProfile === null) return null;
+  if (config.defaultProfile === null) {
+    return null;
+  }
   return config.profiles.find((p) => p.name === config.defaultProfile) ?? null;
 }
 
@@ -96,19 +106,25 @@ function defaultProfileOf(config: Config): ProfileConfig | null {
 export function resolveProfile(
   table: RouteTable,
   config: Config,
-  m: InboundMessage,
+  m: InboundMessage
 ): ResolvedRoute | null {
   const exact = table.get(canonicalChatId(m.chatId));
-  if (exact !== undefined) return { profile: exact.profile, route: exact.route };
+  if (exact !== undefined) {
+    return { profile: exact.profile, route: exact.route };
+  }
 
   // A LID-keyed route for a message that arrived as a phone number, or vice versa.
-  if (m.chatType === 'dm' && m.senderIdAlt !== null && m.senderIdAlt !== '') {
+  if (m.chatType === "dm" && m.senderIdAlt !== null && m.senderIdAlt !== "") {
     const alt = table.get(canonicalChatId(m.senderIdAlt));
-    if (alt !== undefined) return { profile: alt.profile, route: alt.route };
+    if (alt !== undefined) {
+      return { profile: alt.profile, route: alt.route };
+    }
   }
 
   const fallback = defaultProfileOf(config);
-  if (fallback !== null) return { profile: fallback, route: null };
+  if (fallback !== null) {
+    return { profile: fallback, route: null };
+  }
   return null;
 }
 
@@ -122,12 +138,18 @@ export function isRoutedTo(
   table: RouteTable,
   config: Config,
   profileName: string,
-  chatId: string,
+  chatId: string
 ): boolean {
-  if (config.allowUnroutedOutbound) return true;
+  if (config.allowUnroutedOutbound) {
+    return true;
+  }
   const id = canonicalChatId(chatId);
-  if (id === '') return false;
+  if (id === "") {
+    return false;
+  }
   const entry = table.get(id);
-  if (entry !== undefined) return entry.profile.name === profileName;
+  if (entry !== undefined) {
+    return entry.profile.name === profileName;
+  }
   return table.rememberedProfile(id) === profileName;
 }

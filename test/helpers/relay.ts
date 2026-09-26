@@ -1,17 +1,14 @@
 /** Shared fixtures for the WP2 relay/store tests (not a test file itself). */
-import pino from 'pino';
-import type { Config, ProfileConfig } from '../../src/config/schema.js';
-import type { Logger } from '../../src/util/log.js';
-import type { RelayEvent } from '../../src/relay/frames.js';
+import pino from "pino";
+import type { Config, ProfileConfig } from "../../src/config/schema.js";
+import type { Logger } from "../../src/util/log.js";
+import type { RelayEvent } from "../../src/relay/frames.js";
 
 export function silentLogger(): Logger {
-  return pino({ level: 'silent' });
+  return pino({ level: "silent" });
 }
 
-export function testProfile(
-  name: string,
-  overrides: Partial<ProfileConfig> = {},
-): ProfileConfig {
+export function testProfile(name: string, overrides: Partial<ProfileConfig> = {}): ProfileConfig {
   return {
     name,
     gatewayId: `gw-${name}`,
@@ -25,10 +22,10 @@ export function testProfile(
 
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
-    listen: { host: '127.0.0.1', port: 0 },
+    listen: { host: "127.0.0.1", port: 0 },
     publicUrl: null,
-    dataDir: './data',
-    logLevel: 'info',
+    dataDir: "./data",
+    logLevel: "info",
     whatsapp: {
       editStreaming: false,
       sendReadReceipts: false,
@@ -39,24 +36,24 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     media: { maxBytes: 26_214_400, retentionSeconds: 604_800 },
     defaultProfile: null,
     allowUnroutedOutbound: false,
-    profiles: [testProfile('work')],
+    profiles: [testProfile("work")],
     ...overrides,
   };
 }
 
-export function testEvent(text: string, chatId = '34600000000@s.whatsapp.net'): RelayEvent {
+export function testEvent(text: string, chatId = "34600000000@s.whatsapp.net"): RelayEvent {
   return {
     text,
-    message_type: 'text',
+    message_type: "text",
     message_id: `wa-${text}`,
     reply_to_message_id: null,
     source: {
-      platform: 'whatsapp',
+      platform: "whatsapp",
       chat_id: chatId,
-      chat_type: 'dm',
-      chat_name: 'Tester',
+      chat_type: "dm",
+      chat_name: "Tester",
       user_id: chatId,
-      user_name: 'Tester',
+      user_name: "Tester",
       thread_id: null,
       chat_topic: null,
       message_id: `wa-${text}`,

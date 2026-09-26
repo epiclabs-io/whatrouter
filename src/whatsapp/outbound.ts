@@ -6,14 +6,14 @@
  * cross-chat misdelivery upstream: every send in the process goes through one
  * serialized lane with a per-call timeout.
  */
-import { spawn } from 'node:child_process';
+import { spawn } from "node:child_process";
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
   WAMessage,
   WAMessageKey,
-} from '@whiskeysockets/baileys';
-import type { OutboundMedia } from './port.js';
+} from "@whiskeysockets/baileys";
+import type { OutboundMedia } from "./port.js";
 
 /** What `sock.sendMessage(jid, content, options)` needs. */
 export interface SendPayload {
@@ -27,7 +27,7 @@ export interface TextPayloadOptions {
   mentions?: string[] | undefined;
 }
 
-export const OPUS_MIME = 'audio/ogg; codecs=opus';
+export const OPUS_MIME = "audio/ogg; codecs=opus";
 const FFMPEG_TIMEOUT_MS = 30_000;
 
 export function buildTextPayload(text: string, opts: TextPayloadOptions = {}): SendPayload {
@@ -53,12 +53,14 @@ export function buildReactPayload(emoji: string, key: WAMessageKey): SendPayload
 }
 
 function toBuffer(bytes: Uint8Array): Buffer {
-  return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return Buffer.isBuffer(bytes)
+    ? bytes
+    : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
 function isOpus(mime: string): boolean {
   const m = mime.toLowerCase();
-  return m.includes('ogg') || m.includes('opus');
+  return m.includes("ogg") || m.includes("opus");
 }
 
 /**
@@ -69,21 +71,21 @@ export async function transcodeToOpus(bytes: Uint8Array): Promise<Uint8Array | n
   return await new Promise<Uint8Array | null>((resolve) => {
     let child;
     try {
-      child = spawn('ffmpeg', [
-        '-hide_banner',
-        '-loglevel',
-        'error',
-        '-i',
-        'pipe:0',
-        '-ar',
-        '48000',
-        '-ac',
-        '1',
-        '-c:a',
-        'libopus',
-        '-f',
-        'ogg',
-        'pipe:1',
+      child = spawn("ffmpeg", [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        "pipe:0",
+        "-ar",
+        "48000",
+        "-ac",
+        "1",
+        "-c:a",
+        "libopus",
+        "-f",
+        "ogg",
+        "pipe:1",
       ]);
     } catch {
       resolve(null);
@@ -93,24 +95,26 @@ export async function transcodeToOpus(bytes: Uint8Array): Promise<Uint8Array | n
     const parts: Buffer[] = [];
     let settled = false;
     const finish = (value: Uint8Array | null): void => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       resolve(value);
     };
     const timer = setTimeout(() => {
-      child.kill('SIGKILL');
+      child.kill("SIGKILL");
       finish(null);
     }, FFMPEG_TIMEOUT_MS);
     timer.unref?.();
 
-    child.stdout.on('data', (chunk: Buffer) => parts.push(chunk));
-    child.on('error', () => finish(null));
-    child.on('close', (code) => {
+    child.stdout.on("data", (chunk: Buffer) => parts.push(chunk));
+    child.on("error", () => finish(null));
+    child.on("close", (code) => {
       const out = Buffer.concat(parts);
       finish(code === 0 && out.length > 0 ? out : null);
     });
-    child.stdin.on('error', () => finish(null));
+    child.stdin.on("error", () => finish(null));
     child.stdin.end(toBuffer(bytes));
   });
 }
@@ -122,30 +126,30 @@ export interface MediaPayloadDeps {
 
 export async function buildMediaPayload(
   media: OutboundMedia,
-  deps: MediaPayloadDeps = {},
+  deps: MediaPayloadDeps = {}
 ): Promise<SendPayload> {
   const buffer = toBuffer(media.bytes);
-  const caption = media.caption ?? '';
-  const withCaption = caption === '' ? {} : { caption };
+  const caption = media.caption ?? "";
+  const withCaption = caption === "" ? {} : { caption };
 
   switch (media.kind) {
-    case 'image':
+    case "image":
       return { content: { image: buffer, mimetype: media.mime, ...withCaption }, options: {} };
-    case 'video':
+    case "video":
       return { content: { video: buffer, mimetype: media.mime, ...withCaption }, options: {} };
-    case 'document':
+    case "document":
       return {
         content: {
           document: buffer,
           mimetype: media.mime,
-          fileName: media.filename ?? 'file',
+          fileName: media.filename ?? "file",
           ...withCaption,
         },
         options: {},
       };
-    case 'audio':
+    case "audio":
       return { content: { audio: buffer, mimetype: media.mime }, options: {} };
-    case 'voice': {
+    case "voice": {
       if (isOpus(media.mime)) {
         return { content: { audio: buffer, ptt: true, mimetype: OPUS_MIME }, options: {} };
       }
@@ -177,7 +181,7 @@ export interface SendQueueOptions {
 export class SendTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`sendMessage timed out after ${Math.round(timeoutMs / 1000)}s`);
-    this.name = 'SendTimeoutError';
+    this.name = "SendTimeoutError";
   }
 }
 
@@ -197,7 +201,9 @@ export function createSendQueue(opts: SendQueueOptions): SendQueue {
         }),
       ]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
   }
 
@@ -212,7 +218,7 @@ export function createSendQueue(opts: SendQueueOptions): SendQueue {
         },
         () => {
           depth -= 1;
-        },
+        }
       );
       return result;
     },

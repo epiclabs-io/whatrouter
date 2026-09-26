@@ -3,8 +3,8 @@
  * wherever it runs, so `public_url` is what makes inbound media work outside
  * localhost; falling back is loud (once) rather than silent.
  */
-import type { Config } from '../config/schema.js';
-import type { Logger } from '../util/log.js';
+import type { Config } from "../config/schema.js";
+import type { Logger } from "../util/log.js";
 
 export interface MediaUrlOptions {
   /** The port actually bound (matters when `listen` uses port 0). */
@@ -21,16 +21,19 @@ export function resetMediaUrlWarning(): void {
 
 /** `<public_url>` or `http://localhost:<port>`, without a trailing slash. */
 export function mediaBaseUrl(config: Config, opts: MediaUrlOptions = {}): string {
-  if (config.publicUrl !== null && config.publicUrl !== '') {
-    return config.publicUrl.replace(/\/+$/, '');
+  if (config.publicUrl !== null && config.publicUrl !== "") {
+    return config.publicUrl.replace(/\/+$/, "");
   }
   const port = opts.port ?? config.listen.port;
   if (!warned) {
     warned = true;
     const message =
-      'public_url is not set: media URLs fall back to http://localhost — a Hermes instance on another host will not be able to fetch them';
-    if (opts.log !== undefined) opts.log.warn({ port }, message);
-    else console.warn(`whatrouter: ${message}`);
+      "public_url is not set: media URLs fall back to http://localhost — a Hermes instance on another host will not be able to fetch them";
+    if (opts.log !== undefined) {
+      opts.log.warn({ port }, message);
+    } else {
+      console.warn(`whatrouter: ${message}`);
+    }
   }
   return `http://localhost:${port}`;
 }

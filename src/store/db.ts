@@ -5,19 +5,19 @@
  *
  * Migrations are idempotent and forward-only, tracked in `schema_version`.
  */
-import { mkdirSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
-import { DatabaseSync } from 'node:sqlite';
-import { createBufferStore, type BufferStore } from './buffer.js';
-import { createMediaStore, type MediaStore } from './media.js';
-import { createPolicyStore, type PolicyStore } from './policy.js';
-import type { Config } from '../config/schema.js';
+import { mkdirSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
+import { createBufferStore, type BufferStore } from "./buffer.js";
+import { createMediaStore, type MediaStore } from "./media.js";
+import { createPolicyStore, type PolicyStore } from "./policy.js";
+import type { Config } from "../config/schema.js";
 
-export type { BufferStore, BufferedEvent, AppendResult } from './buffer.js';
-export type { MediaStore, MediaMeta, MediaPutResult } from './media.js';
-export { MediaTooLargeError } from './media.js';
-export type { PolicyStore, RelayPolicy } from './policy.js';
+export type { BufferStore, BufferedEvent, AppendResult } from "./buffer.js";
+export type { MediaStore, MediaMeta, MediaPutResult } from "./media.js";
+export { MediaTooLargeError } from "./media.js";
+export type { PolicyStore, RelayPolicy } from "./policy.js";
 
 export interface Store {
   readonly db: DatabaseSync;
@@ -76,17 +76,20 @@ const MIGRATIONS: string[] = [
 ];
 
 function migrate(db: DatabaseSync): void {
-  db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
-  const row = db.prepare('SELECT version FROM schema_version LIMIT 1').get() as
-    | { version?: number }
-    | undefined;
+  db.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)");
+  const row = db.prepare("SELECT version FROM schema_version LIMIT 1").get() as
+    { version?: number } | undefined;
   let current = Number(row?.version ?? 0);
-  if (row === undefined) db.prepare('INSERT INTO schema_version(version) VALUES(0)').run();
+  if (row === undefined) {
+    db.prepare("INSERT INTO schema_version(version) VALUES(0)").run();
+  }
 
-  const setVersion = db.prepare('UPDATE schema_version SET version = ?');
+  const setVersion = db.prepare("UPDATE schema_version SET version = ?");
   while (current < MIGRATIONS.length) {
     const sql = MIGRATIONS[current];
-    if (sql === undefined) break;
+    if (sql === undefined) {
+      break;
+    }
     db.exec(sql);
     current += 1;
     setVersion.run(current);
@@ -94,22 +97,22 @@ function migrate(db: DatabaseSync): void {
 }
 
 function defaultMediaDir(path: string): string {
-  if (path === ':memory:' || path === '') {
+  if (path === ":memory:" || path === "") {
     // In-memory stores are for tests; give them a scratch directory that is
     // only created if media is actually written.
     return join(tmpdir(), `whatrouter-media-${process.pid}`);
   }
-  return join(dirname(resolve(path)), 'media');
+  return join(dirname(resolve(path)), "media");
 }
 
 export function openStore(path: string, opts: OpenStoreOptions = {}): Store {
-  if (path !== ':memory:' && path !== '') {
+  if (path !== ":memory:" && path !== "") {
     mkdirSync(dirname(resolve(path)), { recursive: true });
   }
   const db = new DatabaseSync(path);
-  db.exec('PRAGMA journal_mode = WAL');
-  db.exec('PRAGMA synchronous = NORMAL');
-  db.exec('PRAGMA foreign_keys = ON');
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA synchronous = NORMAL");
+  db.exec("PRAGMA foreign_keys = ON");
   migrate(db);
 
   const mediaDir = opts.mediaDir ?? defaultMediaDir(path);
@@ -134,7 +137,7 @@ export function openStore(path: string, opts: OpenStoreOptions = {}): Store {
 /** `<data_dir>/whatrouter.sqlite` + `<data_dir>/media`, as documented. */
 export function storePathsFor(config: Config): { dbPath: string; mediaDir: string } {
   const dataDir = isAbsolute(config.dataDir) ? config.dataDir : resolve(config.dataDir);
-  return { dbPath: join(dataDir, 'whatrouter.sqlite'), mediaDir: join(dataDir, 'media') };
+  return { dbPath: join(dataDir, "whatrouter.sqlite"), mediaDir: join(dataDir, "media") };
 }
 
 /** The `serve` path: opens the store the config points at. */

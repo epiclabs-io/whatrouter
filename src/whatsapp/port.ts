@@ -3,20 +3,12 @@
  * The router and relay layers import only this file - never Baileys.
  */
 
-export type ChatType = 'dm' | 'group';
+export type ChatType = "dm" | "group";
 
 export type MessageKind =
-  | 'text'
-  | 'image'
-  | 'video'
-  | 'voice'
-  | 'audio'
-  | 'document'
-  | 'sticker'
-  | 'location'
-  | 'other';
+  "text" | "image" | "video" | "voice" | "audio" | "document" | "sticker" | "location" | "other";
 
-export type MediaKind = 'image' | 'video' | 'voice' | 'audio' | 'document' | 'sticker';
+export type MediaKind = "image" | "video" | "voice" | "audio" | "document" | "sticker";
 
 export interface QuotedMessage {
   messageId: string;
@@ -65,7 +57,7 @@ export interface InboundMessage {
 }
 
 export interface OutboundMedia {
-  kind: 'image' | 'video' | 'voice' | 'audio' | 'document';
+  kind: "image" | "video" | "voice" | "audio" | "document";
   bytes: Uint8Array;
   mime: string;
   filename?: string;
@@ -73,7 +65,7 @@ export interface OutboundMedia {
   replyTo?: string;
 }
 
-export type WhatsAppState = 'unpaired' | 'connecting' | 'connected' | 'disconnected';
+export type WhatsAppState = "unpaired" | "connecting" | "connected" | "disconnected";
 
 export type InboundHandler = (m: InboundMessage) => Promise<void>;
 

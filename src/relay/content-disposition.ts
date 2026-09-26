@@ -11,11 +11,11 @@
 /** Header-injection-free, ASCII-only quoted-string value. */
 export function asciiFilename(name: string): string {
   return name
-    .replace(/[\r\n"\\]/g, '')
-    .replace(/[/\\]/g, '_')
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f]/g, '')
-    .replace(/[^\x20-\x7e]/g, '_')
+    .replace(/[\r\n"\\]/g, "")
+    .replace(/[/\\]/g, "_")
+
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[^\x20-\x7e]/g, "_")
     .trim()
     .slice(0, 200);
 }
@@ -28,9 +28,11 @@ export function asciiFilename(name: string): string {
  * for clients that understand it.
  */
 export function contentDisposition(name: string | null, fallback: string): string {
-  const ascii = name === null || name.trim() === '' ? fallback : asciiFilename(name);
-  const quoted = ascii === '' ? fallback : ascii;
-  const encoded = encodeURIComponent(name === null || name.trim() === '' ? fallback : name)
-    .replace(/['()]/g, (ch) => ({ "'": '%27', '(': '%28', ')': '%29' })[ch] ?? ch);
+  const ascii = name === null || name.trim() === "" ? fallback : asciiFilename(name);
+  const quoted = ascii === "" ? fallback : ascii;
+  const encoded = encodeURIComponent(name === null || name.trim() === "" ? fallback : name).replace(
+    /['()]/g,
+    (ch) => ({ "'": "%27", "(": "%28", ")": "%29" })[ch] ?? ch
+  );
   return `inline; filename="${quoted}"; filename*=UTF-8''${encoded}`;
 }

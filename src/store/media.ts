@@ -4,10 +4,10 @@
  * 403) for a profile that does not own the row, so one Hermes instance cannot
  * probe another's media.
  */
-import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import type { DatabaseSync } from 'node:sqlite';
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 
 export interface MediaMeta {
   id: string;
@@ -29,7 +29,13 @@ export interface MediaStore {
   /** Directory the bytes live in. */
   readonly dir: string;
   readonly maxBytes: number;
-  put(profile: string, bytes: Uint8Array, mime: string, filename?: string | null, nowSeconds?: number): MediaPutResult;
+  put(
+    profile: string,
+    bytes: Uint8Array,
+    mime: string,
+    filename?: string | null,
+    nowSeconds?: number
+  ): MediaPutResult;
   get(id: string): { meta: MediaMeta; bytes: Buffer } | null;
   getMeta(id: string): MediaMeta | null;
   delete(id: string): boolean;
@@ -37,12 +43,12 @@ export interface MediaStore {
 }
 
 export class MediaTooLargeError extends Error {
-  readonly code = 'media_too_large';
+  readonly code = "media_too_large";
   readonly size: number;
   readonly limit: number;
   constructor(size: number, limit: number) {
     super(`media is ${size} bytes, limit is ${limit}`);
-    this.name = 'MediaTooLargeError';
+    this.name = "MediaTooLargeError";
     this.size = size;
     this.limit = limit;
   }
@@ -57,30 +63,33 @@ export interface MediaStoreOptions {
 
 const ID_RE = /^[0-9a-f]{32}$/;
 
-const DEFAULT_MIME = 'application/octet-stream';
+const DEFAULT_MIME = "application/octet-stream";
 
 function rowToMeta(row: Record<string, unknown>): MediaMeta {
   return {
-    id: String(row['id']),
-    profile: String(row['profile']),
-    mime: String(row['mime']),
-    filename: row['filename'] === null || row['filename'] === undefined ? null : String(row['filename']),
-    size: Number(row['size']),
-    createdAt: Number(row['created_at']),
+    id: String(row["id"]),
+    profile: String(row["profile"]),
+    mime: String(row["mime"]),
+    filename:
+      row["filename"] === null || row["filename"] === undefined ? null : String(row["filename"]),
+    size: Number(row["size"]),
+    createdAt: Number(row["created_at"]),
   };
 }
 
 export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): MediaStore {
   const insert = db.prepare(
-    'INSERT INTO media(id, profile, mime, filename, size, created_at) VALUES(?, ?, ?, ?, ?, ?)',
+    "INSERT INTO media(id, profile, mime, filename, size, created_at) VALUES(?, ?, ?, ?, ?, ?)"
   );
-  const selectOne = db.prepare('SELECT * FROM media WHERE id = ?');
-  const deleteOne = db.prepare('DELETE FROM media WHERE id = ?');
-  const selectExpired = db.prepare('SELECT id FROM media WHERE created_at < ?');
+  const selectOne = db.prepare("SELECT * FROM media WHERE id = ?");
+  const deleteOne = db.prepare("DELETE FROM media WHERE id = ?");
+  const selectExpired = db.prepare("SELECT id FROM media WHERE created_at < ?");
 
   let dirReady = false;
   function ensureDir(): void {
-    if (dirReady) return;
+    if (dirReady) {
+      return;
+    }
     mkdirSync(opts.dir, { recursive: true });
     dirReady = true;
   }
@@ -91,7 +100,9 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
 
   function unlink(id: string): void {
     const path = pathOf(id);
-    if (path === null) return;
+    if (path === null) {
+      return;
+    }
     try {
       rmSync(path, { force: true });
     } catch {
@@ -108,17 +119,17 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
         throw new MediaTooLargeError(bytes.byteLength, opts.maxBytes);
       }
       ensureDir();
-      const id = randomBytes(16).toString('hex');
+      const id = randomBytes(16).toString("hex");
       const path = join(opts.dir, id);
       writeFileSync(path, bytes);
       try {
         insert.run(
           id,
           profile,
-          mime === '' ? DEFAULT_MIME : mime,
-          filename === undefined || filename === null || filename === '' ? null : filename,
+          mime === "" ? DEFAULT_MIME : mime,
+          filename === undefined || filename === null || filename === "" ? null : filename,
           bytes.byteLength,
-          Math.floor(nowSeconds),
+          Math.floor(nowSeconds)
         );
       } catch (err) {
         try {
@@ -129,19 +140,27 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
         throw err;
       }
       const url = opts.urlFor?.(id);
-      return url === undefined ? { id, size: bytes.byteLength } : { id, size: bytes.byteLength, url };
+      return url === undefined
+        ? { id, size: bytes.byteLength }
+        : { id, size: bytes.byteLength, url };
     },
 
     getMeta(id) {
-      if (!ID_RE.test(id)) return null;
+      if (!ID_RE.test(id)) {
+        return null;
+      }
       const row = selectOne.get(id) as Record<string, unknown> | undefined;
       return row === undefined ? null : rowToMeta(row);
     },
 
     get(id) {
-      if (!ID_RE.test(id)) return null;
+      if (!ID_RE.test(id)) {
+        return null;
+      }
       const row = selectOne.get(id) as Record<string, unknown> | undefined;
-      if (row === undefined) return null;
+      if (row === undefined) {
+        return null;
+      }
       const meta = rowToMeta(row);
       const path = join(opts.dir, meta.id);
       if (!existsSync(path)) {
@@ -153,9 +172,13 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
     },
 
     delete(id) {
-      if (!ID_RE.test(id)) return false;
+      if (!ID_RE.test(id)) {
+        return false;
+      }
       const removed = Number(deleteOne.run(id).changes) > 0;
-      if (removed) unlink(id);
+      if (removed) {
+        unlink(id);
+      }
       return removed;
     },
 
@@ -164,9 +187,13 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
       const rows = selectExpired.all(cutoff) as Array<{ id?: unknown }>;
       let removed = 0;
       for (const row of rows) {
-        const id = String(row.id ?? '');
-        if (id === '') continue;
-        if (Number(deleteOne.run(id).changes) > 0) removed += 1;
+        const id = String(row.id ?? "");
+        if (id === "") {
+          continue;
+        }
+        if (Number(deleteOne.run(id).changes) > 0) {
+          removed += 1;
+        }
         unlink(id);
       }
       return removed;

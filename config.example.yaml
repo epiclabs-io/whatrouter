@@ -15,18 +15,18 @@ data_dir: /data
 log_level: info
 
 whatsapp:
-  edit_streaming: false      # true also flips supports_edit in the descriptor
+  edit_streaming: false # true also flips supports_edit in the descriptor
   send_read_receipts: false
   chunk_delay_ms: 300
   send_timeout_ms: 60000
 
 buffer:
-  max_age_seconds: 1209600   # 14 days
+  max_age_seconds: 1209600 # 14 days
   wake_cooldown_seconds: 60
 
 media:
-  max_bytes: 26214400        # 25 MiB
-  retention_seconds: 604800  # 7 days
+  max_bytes: 26214400 # 25 MiB
+  retention_seconds: 604800 # 7 days
 
 # null = drop messages from chats no route matches.
 default_profile: null
@@ -44,7 +44,7 @@ profiles:
     #   secret: ${WORK_SECRET}            # ${ENV_VAR} interpolation
     #   secret_file: /run/secrets/work    # file contents, trimmed
     display_name: Work Agent
-    wake_url: null             # optional GET poked when a message arrives while offline
+    wake_url: null # optional GET poked when a message arrives while offline
     routes:
       - dm: "+34600000000"
       - group: "120363001234567890@g.us"

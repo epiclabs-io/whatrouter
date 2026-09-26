@@ -2,13 +2,13 @@
  * Raw YAML shape (zod) + the normalized `Config` the rest of the program uses.
  * Everything downstream of `loadConfig` sees canonical JIDs and camelCase fields.
  */
-import { z } from 'zod';
+import { z } from "zod";
 
-export const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
+export const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
-export const DEFAULT_LISTEN = '0.0.0.0:8466';
-export const DEFAULT_DATA_DIR = './data';
+export const DEFAULT_LISTEN = "0.0.0.0:8466";
+export const DEFAULT_DATA_DIR = "./data";
 export const MIN_SECRET_LENGTH = 32;
 
 // ------------------------------------------------------------------ raw shape
@@ -37,7 +37,7 @@ export const rawConfigSchema = z.strictObject({
   listen: z.string().default(DEFAULT_LISTEN),
   public_url: z.string().nullable().default(null),
   data_dir: z.string().default(DEFAULT_DATA_DIR),
-  log_level: z.enum(LOG_LEVELS).default('info'),
+  log_level: z.enum(LOG_LEVELS).default("info"),
   whatsapp: z
     .strictObject({
       edit_streaming: z.boolean().default(false),
@@ -62,7 +62,7 @@ export const rawConfigSchema = z.strictObject({
   allow_unrouted_outbound: z.boolean().default(false),
   profiles: z
     .record(z.string(), profileSchema)
-    .refine((v) => Object.keys(v).length > 0, { message: 'at least one profile is required' }),
+    .refine((v) => Object.keys(v).length > 0, { message: "at least one profile is required" }),
 });
 
 export type RawConfig = z.infer<typeof rawConfigSchema>;
@@ -70,13 +70,13 @@ export type RawConfig = z.infer<typeof rawConfigSchema>;
 // ------------------------------------------------------------ normalized shape
 
 export interface DmRoute {
-  kind: 'dm';
+  kind: "dm";
   /** `<digits>@s.whatsapp.net` or `<digits>@lid`. */
   id: string;
 }
 
 export interface GroupRoute {
-  kind: 'group';
+  kind: "group";
   id: `${string}@g.us`;
   /** `undefined` = not configured, so the router can apply policy precedence. */
   requireMention: boolean | undefined;
@@ -128,8 +128,8 @@ export type ValidateResult =
 export class ConfigError extends Error {
   readonly errors: Issue[];
   constructor(errors: Issue[]) {
-    super(errors.map((e) => `${e.path}: ${e.message}`).join('; ') || 'invalid configuration');
-    this.name = 'ConfigError';
+    super(errors.map((e) => `${e.path}: ${e.message}`).join("; ") || "invalid configuration");
+    this.name = "ConfigError";
     this.errors = errors;
   }
 }
@@ -138,12 +138,12 @@ export class ConfigError extends Error {
 export function relayUrl(config: Config): string {
   if (config.publicUrl !== null) {
     const base = new URL(config.publicUrl);
-    const scheme = base.protocol === 'https:' ? 'wss' : 'ws';
-    const path = base.pathname.replace(/\/+$/, '');
+    const scheme = base.protocol === "https:" ? "wss" : "ws";
+    const path = base.pathname.replace(/\/+$/, "");
     return `${scheme}://${base.host}${path}/relay`;
   }
   const { host, port } = config.listen;
   // A wildcard bind address is not dialable; the operator most likely means this host.
-  const target = host === '0.0.0.0' || host === '::' || host === '' ? 'localhost' : host;
+  const target = host === "0.0.0.0" || host === "::" || host === "" ? "localhost" : host;
   return `ws://${target}:${port}/relay`;
 }
