@@ -137,7 +137,7 @@ Required unit-test vectors (generated from the real Python `auth.py`, `time.time
 
 Gateway treats `markdown_dialect ∉ {"", "plain"}` as "code blocks OK"; an explicit
 `supported_ops` list is mandatory (empty ⇒ gateway assumes legacy `send,edit,typing,follow_up`).
-`supports_edit` follows config `whatsapp.edit_streaming` (default false).
+`supports_edit` follows config `whatsapp.edit_streaming` (default true).
 
 ### Inbound `event` shape (consumed by `_event_from_wire`)
 
@@ -235,7 +235,7 @@ public_url: https://whatrouter.example.com # base for media URLs; warn+fallback 
 data_dir: /data # wa-auth/, whatrouter.sqlite, media/
 log_level: info
 whatsapp:
-  edit_streaming: false
+  edit_streaming: true
   send_read_receipts: false
   chunk_delay_ms: 300
   send_timeout_ms: 60000

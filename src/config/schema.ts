@@ -40,7 +40,7 @@ export const rawConfigSchema = z.strictObject({
   log_level: z.enum(LOG_LEVELS).default("info"),
   whatsapp: z
     .strictObject({
-      edit_streaming: z.boolean().default(false),
+      edit_streaming: z.boolean().default(true),
       send_read_receipts: z.boolean().default(false),
       chunk_delay_ms: z.number().int().nonnegative().default(300),
       send_timeout_ms: z.number().int().positive().default(60000),

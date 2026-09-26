@@ -15,7 +15,7 @@ data_dir: /data
 log_level: info
 
 whatsapp:
-  edit_streaming: false # true also flips supports_edit in the descriptor
+  edit_streaming: true # streams the reply by editing its message; also flips supports_edit in the descriptor
   send_read_receipts: false
   chunk_delay_ms: 300
   send_timeout_ms: 60000
