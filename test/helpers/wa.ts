@@ -53,6 +53,7 @@ export function testConfig(overrides: Partial<Config["whatsapp"]> = {}): Config 
     media: { maxBytes: 26214400, retentionSeconds: 604800 },
     defaultProfile: null,
     allowUnroutedOutbound: false,
+    management: null,
     profiles: [],
   };
 }

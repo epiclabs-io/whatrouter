@@ -5,7 +5,10 @@ Drives the REAL Hermes gateway relay client
 WhatRouter with ``WHATROUTER_FAKE_WHATSAPP=1``: handshake and descriptor,
 per-profile routing and isolation, the relevance gate, every outbound op's
 result shape, media re-hosting through ``gateway.relay.media.RelayMediaClient``,
-and the going_idle / buffered-replay / reconnect state machine.
+and the going_idle / buffered-replay / reconnect state machine. Finally the
+management route: ``close_profile`` on a live Hermes transport, which must see
+``1013`` during the hold as retryable (never a revocation latch) and reconnect
+by itself afterwards, replaying what was buffered meanwhile.
 
 Run it through ``scripts/conformance/run.sh`` (which starts the server and
 supplies the environment). Exits 1 if any check fails.
@@ -29,6 +32,8 @@ GW_A = os.environ.get("WR_GATEWAY_A", "gw-a")
 GW_B = os.environ.get("WR_GATEWAY_B", "gw-b")
 SECRET_A = os.environ.get("WR_SECRET_A", "")
 SECRET_B = os.environ.get("WR_SECRET_B", "")
+MANAGEMENT_SECRET = os.environ.get("WR_MANAGEMENT_SECRET", "")
+HOLD_S = 20.0
 
 ALICE = "+34600000001"
 ALICE_JID = "34600000001@s.whatsapp.net"
@@ -118,7 +123,8 @@ async def main() -> int:  # noqa: PLR0915 - a linear probe reads better than hel
           d.contract_version == 1 and d.platform == "whatsapp")
     check("descriptor: max_message_length 4096, len_unit chars",
           d.max_message_length == 4096 and d.len_unit == "chars")
-    check("descriptor: supports_edit False by default", d.supports_edit is False)
+    # whatsapp.edit_streaming defaults to true, which advertises edit support.
+    check("descriptor: supports_edit True by default", d.supports_edit is True)
     check(
         "descriptor: advertises send/edit/delete/typing/react/send_media/get_chat_info",
         all(d.supports_op(op) for op in
@@ -325,6 +331,60 @@ async def main() -> int:  # noqa: PLR0915 - a linear probe reads better than hel
           health.get("status") == "ok" and health.get("whatsapp") == "connected"
           and set(health.get("profiles", {})) == {"a", "b"},
           json.dumps(health))
+
+    # ── management hold ──────────────────────────────────────────────────
+    import websockets
+
+    # A production gateway dials with reconnect=True; the hold is only
+    # meaningful against that supervisor, so B gets a fresh transport like it.
+    await tb.disconnect()
+    tb = WebSocketRelayTransport(
+        BASE, "whatsapp", "", gateway_id=GW_B, upgrade_secret=SECRET_B, reconnect=True
+    )
+    b_inbox = asyncio.Queue()
+    tb.set_inbound_handler(lambda e: b_inbox.put(e))
+    await tb.connect()
+    await tb.handshake()
+
+    async with websockets.connect(
+        BASE.replace("http", "ws", 1) + "/management",
+        additional_headers={"Authorization": f"Bearer {MANAGEMENT_SECRET}"},
+    ) as mgmt:
+        async def request(frame: dict[str, Any]) -> dict[str, Any]:
+            await mgmt.send(json.dumps(frame) + "\n")
+            while True:
+                for line in str(await asyncio.wait_for(mgmt.recv(), 5)).splitlines():
+                    msg = json.loads(line)
+                    if msg.get("type") == "result" and msg.get("requestId") == frame["requestId"]:
+                        return msg["result"]
+
+        sub = await request({"type": "subscribe", "requestId": "s1", "events": ["message_pending"]})
+        check("management: subscribe succeeds", sub.get("success") is True, json.dumps(sub))
+
+        res = await request({"type": "close_profile", "requestId": "c1", "profile": "b"})
+        check("management: close_profile detaches the live Hermes session",
+              res.get("success") is True and res.get("wasConnected") is True, json.dumps(res))
+        health = get_json("/healthz")
+        check("healthz shows b disconnected and blocked",
+              health["profiles"]["b"].get("connected") is False
+              and "blockedUntilMs" in health["profiles"]["b"], json.dumps(health))
+
+        post_inbound({"chatId": BOB, "text": "while held", "messageId": "m-held"})
+        # Hermes re-dials on its own and is refused 1013 until the hold lapses.
+        await asyncio.sleep(HOLD_S / 2)
+        health = get_json("/healthz")
+        check("Hermes stays refused during the hold",
+              health["profiles"]["b"].get("connected") is False, json.dumps(health))
+        check("1013 does not latch a revocation in Hermes", not tb.auth_revoked)
+
+        deadline = time.time() + HOLD_S + 40
+        while time.time() < deadline and not get_json("/healthz")["profiles"]["b"]["connected"]:
+            await asyncio.sleep(0.5)
+        check("Hermes reconnects by itself after the hold",
+              get_json("/healthz")["profiles"]["b"]["connected"] is True)
+        e = await drain(b_inbox, timeout=10)
+        check("the message buffered during the hold replays after reconnect",
+              e is not None and e.text == "while held", repr(e))
 
     await ta3.disconnect()
     await tb.disconnect()

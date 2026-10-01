@@ -13,6 +13,11 @@ export function encodeFrame(frame: RelayFrame): string {
 /** Buffers partial lines across chunks and yields complete, non-empty ones. */
 export class LineAssembler {
   #buf = "";
+  readonly #trimLines: boolean;
+
+  constructor(trimLines = true) {
+    this.#trimLines = trimLines;
+  }
 
   push(chunk: string): string[] {
     if (chunk === "") {
@@ -22,10 +27,10 @@ export class LineAssembler {
     const lines: string[] = [];
     let nl = this.#buf.indexOf("\n");
     while (nl !== -1) {
-      const line = this.#buf.slice(0, nl).trim();
+      const rawLine = this.#buf.slice(0, nl);
       this.#buf = this.#buf.slice(nl + 1);
-      if (line !== "") {
-        lines.push(line);
+      if (rawLine.trim() !== "") {
+        lines.push(this.#trimLines ? rawLine.trim() : rawLine);
       }
       nl = this.#buf.indexOf("\n");
     }

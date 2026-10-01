@@ -202,6 +202,8 @@ Top level:
 | `media.retention_seconds`      | int > 0              | `604800` (7 d)      | How long re-hosted media stays fetchable.                                                                                                                                                                                             |
 | `default_profile`              | profile name or null | null                | Profile that receives chats no route matches. Null means drop them (fail-closed).                                                                                                                                                     |
 | `allow_unrouted_outbound`      | bool                 | `false`             | Let a profile send to chats not routed to it. Leave it false unless you know why you need it.                                                                                                                                         |
+| `management.secret`            | string >= 32 chars   | —                   | Enables the `GET /management` orchestrator API (see [Management API](#management-api)). Must differ from every profile secret. Omit `management` to disable the route.                                                                |
+| `management.secret_file`       | path                 | —                   | Read the management secret from a file instead (contents trimmed). Exactly one of `secret` / `secret_file`.                                                                                                                           |
 | `profiles`                     | map                  | —                   | At least one. The key is the profile name used by `whatrouter env <name>`.                                                                                                                                                            |
 
 Per profile (`profiles.<name>`):
@@ -244,7 +246,8 @@ value from a path — a Docker or Kubernetes secret mount, for example.
 `check-config` reports every problem at once, not just the first: duplicate `gateway_id`, a secret
 under 32 characters or shared by two profiles, `secret` and `secret_file` both set, a chat routed
 to two profiles, malformed phone numbers or JIDs, an unknown `default_profile`, an unset `${ENV}`
-reference, a bad `listen`/`public_url`/`wake_url`, or an unknown key.
+reference, a bad `listen`/`public_url`/`wake_url`, a management secret that is too short or
+equal to a profile secret, or an unknown key.
 
 ## The Hermes side
 
@@ -282,13 +285,15 @@ threads (`supports_threads: false`), draft streaming, polls, and — unless you 
 
 `whatsapp` is one of `connected`, `connecting`, `disconnected`, `unpaired`. Per profile,
 `connected` means that Hermes instance currently holds a relay socket and `buffered` is how many
-events are waiting for it. The container's `HEALTHCHECK` polls this endpoint.
+events are waiting for it. While a [management hold](#management-api) is in force the profile
+also carries `blockedUntilMs` (epoch milliseconds); the field is absent otherwise. The
+container's `HEALTHCHECK` polls this endpoint.
 
 **Logs** are newline-delimited JSON on stdout (pretty-printed only on an interactive terminal).
 `WHATROUTER_LOG_LEVEL=debug docker compose up` raises the level without touching the config.
 
 **Stopping.** `serve` shuts down on SIGTERM: it closes the relay sockets with code 1001 (gateways
-treat that as a normal restart and reconnect), stops the WhatsApp socket and closes sqlite, so
+treat that as a normal restart and reconnect) and the management socket, if any, with 1001 too, stops the WhatsApp socket and closes sqlite, so
 `docker compose stop` and `systemctl stop` are clean. `tini` is PID 1 in the image precisely so
 the signal reaches node.
 
@@ -319,7 +324,99 @@ reconnect and drain on their own. Re-pairing is only needed if WhatsApp logged t
 Between those two steps the instance sees close code 4401 and stops reconnecting until it is
 restarted with the new secret; other profiles are unaffected, and its messages are buffered.
 
-## Troubleshooting
+## Management API
+
+An external orchestrator can watch for new inbound messages per profile, suspend an idle agent and
+resume it when a message arrives. This is an optional, separate WebSocket route; the Hermes relay
+protocol on `/relay` is unchanged by it.
+
+**Setup.** Add a `management:` block with `secret` (or `secret_file`) and restart. Without the
+block, `/management` is rejected exactly like any unknown path. Generate the secret with
+`openssl rand -hex 32`; it must be at least 32 characters and differ from every profile secret.
+
+**Auth.** `GET /management` with `Authorization: Bearer <management secret>` and a WebSocket
+upgrade. The secret is compared in constant time and never logged. A missing or wrong secret
+completes the handshake and is then closed `4401 unauthorized`. Failed attempts are not throttled
+and do not count towards the relay's per-IP limit, so they can never lock out agents sharing that
+address. Profile secrets and relay tokens never grant management access.
+
+**Use TLS.** The management secret is a long-lived bearer credential with full control over every
+agent's relay session. Outside a trusted local network, reach `/management` only over `wss://`
+(for example, behind a TLS-terminating reverse proxy) — never plain `ws://` — and keep the port
+off the public internet where possible. Rotate the secret by changing it in the config and
+restarting WhatRouter.
+Exactly one management client may be connected; a second one is closed `1008 duplicate
+management session`.
+
+**Framing.** NDJSON over text messages: one JSON object per line, each terminated by `\n`. A
+frame may be split across, or share, WebSocket messages. Every request carries a `requestId`
+(non-empty, at most 128 characters) and gets exactly one `result` with the same `requestId`.
+
+```text
+-> {"type":"subscribe","requestId":"sub-1","events":["message_pending"]}
+<- {"type":"result","requestId":"sub-1","result":{"success":true,"events":["message_pending"],
+    "pending":[{"profile":"work","gatewayId":"gw-work","bufferedCount":3}]}}
+
+<- {"type":"event","event":"message_pending",
+    "data":{"profile":"work","gatewayId":"gw-work","messageId":"WA123","delivery":"live"}}
+
+-> {"type":"close_profile","requestId":"close-1","profile":"work"}
+<- {"type":"result","requestId":"close-1","result":{"success":true,"profile":"work",
+    "wasConnected":true,"blockedUntilMs":1790870420123,"retryAfterMs":20000}}
+```
+
+(Wrapped here for reading; on the wire each frame is a single line.)
+
+- `subscribe` replaces the whole subscription; `"events":[]` unsubscribes, and repeating the same
+  request is harmless. An unsupported event name fails the request and leaves the previous
+  subscription in place. No event is sent before a successful subscribe result. `pending` lists
+  every profile whose durable buffer is non-empty at that moment — this is how a client recovers
+  from events it missed while disconnected.
+- `message_pending` means WhatRouter accepted a new inbound WhatsApp message for the profile:
+  `delivery` is `live` (sent to the connected agent) or `buffered` (stored for later). It does
+  not mean the agent processed it. It is sent once per new message and never for buffer replays
+  after a reconnect or for unrouted messages, and it carries no text, sender, chat or media.
+- `close_profile` closes that profile's relay session and refuses its reconnects for 20 seconds.
+  The result is sent only after live delivery is already off, so the orchestrator can suspend the
+  agent as soon as it arrives. A known but already-disconnected profile also succeeds
+  (`wasConnected:false`) and still starts the hold; every successful call restarts the full 20 s.
+  An unknown profile answers `{"success":false,"error":"unknown profile"}`.
+- Any other problem with a request that has a valid `requestId` is answered with
+  `{"success":false,"error":"…"}`.
+
+**Guarantees.** Events are best effort and not durable: there is no ack, no replay log, and
+publishing never delays or fails inbound delivery. Output is bounded at 1 MiB unread per client:
+any frame that would take the queue past that limit is not sent, and the client is closed
+`1013 management client too slow`. The buffer itself stays
+durable, so nothing is lost for the agent.
+
+**Close codes** on `/management`: `4401 unauthorized` (bad secret), `1008 duplicate management
+session`, `1008 invalid management frame` (malformed JSON, a non-object, or a missing, empty or
+oversized `requestId`), `1003 text frames only` (binary message), `1009` (a single frame over
+64 KiB of UTF-8, or a single WebSocket message over 1 MiB),
+`1013 management client too slow`, `1001 going away` (WhatRouter shutting down).
+
+**What the agent sees.** Its relay socket is closed `1001 closed by management`; reconnects during
+the hold are closed `1013 profile temporarily suspended`. Hermes treats both as retryable (it
+latches only on `4401`), so it keeps re-dialing with backoff and reconnects by itself once the
+hold ends, replaying everything buffered meanwhile. During the hold `wake_url` pokes are
+suppressed; when the hold ends, if the profile is still offline with buffered messages, one normal
+wake poke is sent (subject to `buffer.wake_cooldown_seconds`).
+
+**Caveats.** Holds live in memory only: restarting WhatRouter clears them, and the agent may
+reconnect immediately. Outbound actions the agent had already started when its session was closed
+cannot be cancelled — they may still reach WhatsApp, but their results are no longer reported to
+the agent.
+
+**Orchestrator workflow.**
+
+1. Connect to `/management` and `subscribe` to `message_pending`. Resume (start) every agent
+   listed in `pending`.
+2. When an agent has been idle long enough, send `close_profile` for it. Once the result arrives,
+   suspend its container; new messages now buffer.
+3. On a `message_pending` event for a suspended profile, resume its container. Hermes reconnects
+   once the hold has passed (`blockedUntilMs`) and drains the buffer.
+4. After reconnecting the management socket, `subscribe` again and use `pending` to catch up.
 
 | Symptom                                                  | Cause and fix                                                                                                                                                                                                                                                          |
 | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -327,6 +424,7 @@ restarted with the new secret; other profiles are unaffected, and its messages a
 | Close code `4401` with reason `expired`                  | Only the token's expiry failed: the two machines' clocks differ by more than ~5 minutes. Fix NTP on both; the gateway then reconnects by itself.                                                                                                                       |
 | Hermes says auth was revoked and stops reconnecting      | Hermes latches after a post-handshake 4401 on purpose, so a wrong secret cannot hammer the connector. Fix the secret, then `hermes gateway restart`; WhatRouter alone cannot unlatch it.                                                                               |
 | Close code `1008 duplicate session`                      | Two Hermes instances share a `gateway_id`. The _new_ connection is refused, not the live one. Give each instance its own profile.                                                                                                                                      |
+| Close code `1013 profile temporarily suspended`          | The management API closed this profile less than 20 seconds ago. Hermes keeps retrying and gets in once the hold expires; `/healthz` shows `blockedUntilMs` meanwhile.                                                                                                 |
 | In Docker: `EACCES: permission denied, mkdir 'data'`     | `data_dir` is relative, so it resolves under `/app`, which the unprivileged `node` user cannot write. Set `data_dir: /data` — the volume.                                                                                                                              |
 | `serve` exits 2 with a `whatrouter pair` hint            | The WhatsApp account is not linked in this `data_dir`. Run `docker compose run --rm -it whatrouter pair` once, then start again — and check both commands use the same volume.                                                                                         |
 | Logs say the session was logged out; state is `unpaired` | The linked device was removed from the phone, or WhatsApp invalidated it. Delete `<data_dir>/wa-auth` and pair again.                                                                                                                                                  |

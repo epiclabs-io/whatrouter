@@ -208,10 +208,86 @@ Gateway treats `markdown_dialect ∉ {"", "plain"}` as "code blocks OK"; an expl
 | `POST /relay/policy`                                                           | HMAC bearer                                               | Store `{platform, requireAddress, freeResponseScopes, allowOtherBots}` per profile → `200 {}` |
 | `POST /relay/media`                                                            | HMAC bearer; raw body; `Content-Type`, `X-Media-Filename` | Store ≤25 MB → `{id}`; owned by profile                                                       |
 | `GET /relay/media/{id}`                                                        | HMAC bearer of owning profile                             | Bytes + `Content-Type` + `Content-Disposition`                                                |
-| `GET /healthz`                                                                 | none                                                      | `{status, whatsapp:"connected                                                                 | connecting | disconnected | unpaired", profiles:{id:{connected, buffered}}}` |
+| `GET /healthz`                                                                 | none                                                      | `{status, whatsapp:"connected                                                                 | connecting | disconnected | unpaired", profiles:{id:{connected, buffered, blockedUntilMs?}}}` |
+| `GET /management`                                                              | static management bearer (upgrade); only if configured    | Orchestrator WebSocket — see "Management API" below; unknown path when not configured         |
 | `/relay/enroll`, `/relay/provision`                                            |                                                           | 404 by design                                                                                 |
 | `POST /debug/inbound`                                                          | only when `WHATROUTER_FAKE_WHATSAPP=1`                    | inject a fake inbound (tests/conformance)                                                     |
 | Auth failures: log at warn, per-IP throttle (10 failures/60 s → 429 for HTTP). |
+
+## Management API (`GET /management`) — separate from the relay contract
+
+Added 2026-10-01. Everything in the wire protocol reference above is **unchanged**: no relay frame,
+close code or auth rule was altered, and a management connection is never a relay session. The
+management contract lives in `src/management/` (`frames.ts`, `endpoint.ts`, `auth.ts`), not in
+`src/relay/frames.ts`.
+
+- **Purpose.** Let an orchestrator see newly accepted inbound messages per profile, close an idle
+  agent's relay session, suspend its container, and resume it when a message arrives. It controls
+  Hermes relay sessions only, never the WhatsApp/Baileys connection.
+- **Routing.** Same HTTP listener and `upgrade` handler, separate `WebSocketServer` (`noServer`,
+  `maxPayload` 1 MiB per WebSocket message) and client set. Without `management:` in the config
+  the path is handled like any unknown path (400, socket destroyed). Every upgrade callback, on
+  both routes, installs an `error` listener before any rejection path: a malformed frame in the
+  upgrade packet would otherwise surface as an unhandled `error` and crash the process.
+- **Auth.** `Authorization: Bearer <management.secret>`, compared in constant time (both sides
+  SHA-256'd, then `timingSafeEqual`). Not the HMAC token format; a profile secret can never equal
+  it (config error). An empty or blank secret is a config error too. Failures complete the
+  handshake and close `4401 unauthorized` and are logged without the token. They are **not**
+  throttled and never touch the relay's per-IP throttle: a shared bucket would let management
+  failures (e.g. behind one reverse proxy) turn relay reconnects into 4401s, which Hermes latches
+  as revocation after its one fresh-token retry. Outside a trusted network the route must be
+  reached over `wss://`; the secret is a long-lived bearer credential.
+- **Singleton.** One client; a second authenticated one is closed `1008 duplicate management
+session`. WS ping every 30 s, 60 s pong timeout, independent of relay sessions.
+- **Framing.** NDJSON over text messages via the relay's `LineAssembler` (split/coalesced frames).
+  Requests need `requestId` (1–128 chars). Unanswerable input (bad JSON, non-object, bad
+  `requestId`) → close `1008 invalid management frame`; binary → `1003 text frames only`; an
+  assembled line (one frame) over 64 KiB of UTF-8 → `1009 management frame too large`; a single
+  WebSocket message over 1 MiB → `1009` from `ws`. Coalesced frames are limited individually,
+  not by their sum. Answerable problems → `{success:false,error}` with a fixed
+  error string (client input is never reflected into results or logs). Unknown request fields
+  are rejected (strict).
+- **`subscribe`** `{events:[…]}` replaces the subscription atomically (only `message_pending`
+  exists; `[]` unsubscribes). The result is written _before_ publication is enabled, so no event
+  can precede it, and it carries `pending`: every configured profile whose sqlite buffer count is
+  > 0 at that moment (missed-event recovery; events themselves are not durable).
+- **`message_pending`** `{profile, gatewayId, messageId, delivery:"live"|"buffered"}` is published
+  from `RelayServer.deliver()` exactly once per accepted new message, after the live-vs-buffered
+  outcome is settled. Not for unknown profiles, not for buffer replay (which goes through
+  `Session` pumping, not `deliver()`). No text, sender, chat or media. Publication is best effort:
+  it never throws into `deliver()`. Every frame is encoded first; if `bufferedAmount` plus its
+  UTF-8 size would exceed 1 MiB it is not queued and the client is closed `1013`, so queued
+  output never exceeds the bound (this also covers an oversized `subscribe` snapshot).
+- **`close_profile`** `{profile}` →
+  `{success, profile, wasConnected, blockedUntilMs, retryAfterMs:20000}` or `{success:false,error:"unknown profile"}`. Performed synchronously
+  before the result is written:
+  1. `holds[profile] = nowMs + 20_000` (replacing any prior hold and its expiry timer);
+  2. remove the entry from `sessions` immediately;
+  3. clear its ping timer and `Session.close()` — later `deliver()` calls buffer to sqlite;
+  4. `ws.close(1001, "closed by management")`, tracked in a `detached` set with a 5 s grace
+     before `terminate()`.
+
+  The socket's own `close` handler keeps its identity guard (`sessions.get(name) === entry`), so
+  a late close of the old socket cannot remove a newer session. Already-started outbound actions
+  are not cancellable: they may complete on WhatsApp, but `Session.close()` suppresses their
+  `outbound_result`, and frames still arriving on the old socket are ignored.
+
+- **Hold.** Checked after successful relay auth, right before `attachSession()` (same tick, so no
+  auth→attach race): while `nowMs < blockedUntilMs` the upgrade is completed and closed
+  `1013 profile temporarily suspended` — not 4401 (Hermes would latch it as revocation) and not
+  1008 (reads as a duplicate). No session, no descriptor, no drain. At/after the deadline the hold
+  is ignored. Holds are memory-only (no migration); a restart clears them. Verified against the
+  pinned Hermes in `scripts/conformance/probe.py`: 1013 is retried with backoff, never latched,
+  and the transport reconnects and drains after the hold.
+- **Wake.** While held, `maybeWake()` returns before touching the cooldown. An expiry timer per
+  hold (rescheduled if it fires early, ignored if superseded) deletes the hold and, if the profile
+  is still disconnected with a non-empty buffer, calls `maybeWake()` once (normal cooldown
+  applies) — `wasEmpty` cannot be relied on because the buffer is usually already non-empty.
+- **Shutdown.** Cancel hold timers, close management `1001 going away`, terminate detached relay
+  sockets, close relay sessions `1001`, then close both WebSocket servers with a 2 s grace after
+  which remaining clients are terminated.
+- **Testability.** `createRelayServer` accepts `nowMs` and `scheduleHoldExpiry` so tests drive
+  the 20 s hold without sleeping.
 
 ## WhatsApp mapping rules (Baileys 7)
 
@@ -247,6 +323,8 @@ media:
   retention_seconds: 604800
 default_profile: null # null = drop unrouted chats
 allow_unrouted_outbound: false
+management: # optional; omit to disable GET /management
+  secret: ${WHATROUTER_MANAGEMENT_SECRET} # or secret_file:; >= 32 chars, != every profile secret
 profiles:
   work:
     gateway_id: gw-work
@@ -379,3 +457,4 @@ Deviations from the layout above that were accepted during review; the behaviour
 - `config.example.yaml` ships `data_dir: /data` so the Docker quick start works verbatim; Node users set a relative path.
 - The runtime image is ~750 MB, ~465 MB of which is Debian's `ffmpeg` (voice-note transcoding). A static ffmpeg would roughly halve it.
 - Verified: `scripts/conformance/run.sh` passes 47/47 against `NousResearch/hermes-agent@2c65d5a` (see `scripts/conformance/HERMES_PIN`).
+- 2026-10-01: the probe gained a management-hold section (7 checks), and its descriptor check now expects `supports_edit` true, matching the `whatsapp.edit_streaming: true` default.

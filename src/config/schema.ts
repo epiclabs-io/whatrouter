@@ -24,6 +24,11 @@ const routeSchema = z
     message: 'a route needs exactly one of "dm" or "group"',
   });
 
+const managementSchema = z.strictObject({
+  secret: z.string().optional(),
+  secret_file: z.string().optional(),
+});
+
 const profileSchema = z.strictObject({
   gateway_id: z.string().min(1),
   secret: z.string().optional(),
@@ -60,6 +65,8 @@ export const rawConfigSchema = z.strictObject({
     .prefault({}),
   default_profile: z.string().nullable().default(null),
   allow_unrouted_outbound: z.boolean().default(false),
+  /** Omitted (or null) = the `/management` route does not exist. */
+  management: managementSchema.nullable().default(null),
   profiles: z
     .record(z.string(), profileSchema)
     .refine((v) => Object.keys(v).length > 0, { message: "at least one profile is required" }),
@@ -112,6 +119,8 @@ export interface Config {
   media: { maxBytes: number; retentionSeconds: number };
   defaultProfile: string | null;
   allowUnroutedOutbound: boolean;
+  /** Static bearer secret for `GET /management`; null = route disabled. */
+  management: { secret: string } | null;
   profiles: ProfileConfig[];
 }
 
