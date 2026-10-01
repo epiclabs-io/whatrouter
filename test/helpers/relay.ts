@@ -36,6 +36,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     media: { maxBytes: 26_214_400, retentionSeconds: 604_800 },
     defaultProfile: null,
     allowUnroutedOutbound: false,
+    management: null,
     profiles: [testProfile("work")],
     ...overrides,
   };

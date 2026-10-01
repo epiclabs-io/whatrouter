@@ -117,6 +117,65 @@ function parseListen(raw: string): { host: string; port: number } | null {
   return { host: host === "" ? "0.0.0.0" : host, port };
 }
 
+/**
+ * `secret` vs `secret_file`: exactly one, resolved to a plain string (files are
+ * trimmed) and length-checked. Returns "" when it could not be resolved; the
+ * reason is already in `errors`. `path` is where further secret errors belong.
+ */
+function resolveSecret(
+  raw: { secret?: string | undefined; secret_file?: string | undefined },
+  base: string,
+  ctx: ValidateContext,
+  errors: Issue[]
+): { secret: string; path: string } {
+  let secret = "";
+  let resolved = false;
+  const hasSecret = raw.secret !== undefined;
+  const hasSecretFile = raw.secret_file !== undefined;
+  if (hasSecret && hasSecretFile) {
+    errors.push({
+      path: `${base}.secret`,
+      message: 'set either "secret" or "secret_file", not both',
+    });
+  } else if (!hasSecret && !hasSecretFile) {
+    errors.push({ path: `${base}.secret`, message: 'missing "secret" (or "secret_file")' });
+  } else if (hasSecret) {
+    secret = raw.secret ?? "";
+    resolved = true;
+  } else {
+    const file = raw.secret_file ?? "";
+    const read = ctx.readFile;
+    if (read === undefined) {
+      errors.push({
+        path: `${base}.secret_file`,
+        message: "secret_file is not supported in this context",
+      });
+    } else {
+      try {
+        secret = read(file).trim();
+        resolved = true;
+      } catch (err) {
+        errors.push({
+          path: `${base}.secret_file`,
+          message: `cannot read secret_file "${file}": ${errorMessage(err)}`,
+        });
+      }
+    }
+  }
+
+  const path = hasSecretFile && !hasSecret ? `${base}.secret_file` : `${base}.secret`;
+  if (resolved && secret.trim() === "") {
+    // An empty or whitespace-only value is not "no secret": it is a broken one.
+    errors.push({ path, message: `secret is empty (minimum ${MIN_SECRET_LENGTH} chars)` });
+  } else if (secret !== "" && secret.length < MIN_SECRET_LENGTH) {
+    errors.push({
+      path,
+      message: `secret is too short (${secret.length} chars, minimum ${MIN_SECRET_LENGTH})`,
+    });
+  }
+  return { secret, path };
+}
+
 /** Pure: no filesystem and no `process.env` unless the caller supplies them. */
 export function validateConfig(raw: unknown, ctx: ValidateContext = {}): ValidateResult {
   const env = ctx.env ?? {};
@@ -165,6 +224,10 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
 
   for (const [name, rawProfile] of Object.entries(data.profiles)) {
     const base = `profiles.${name}`;
+    // A profile is addressed by its name (logs, `whatrouter env`, management).
+    if (name.trim() === "") {
+      errors.push({ path: "profiles", message: "profile names must not be empty" });
+    }
 
     const previousGateway = gatewayIds.get(rawProfile.gateway_id);
     if (previousGateway !== undefined) {
@@ -176,46 +239,7 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
       gatewayIds.set(rawProfile.gateway_id, name);
     }
 
-    // secret vs secret_file: exactly one, resolved to a plain string here.
-    let secret = "";
-    const hasSecret = rawProfile.secret !== undefined;
-    const hasSecretFile = rawProfile.secret_file !== undefined;
-    if (hasSecret && hasSecretFile) {
-      errors.push({
-        path: `${base}.secret`,
-        message: 'set either "secret" or "secret_file", not both',
-      });
-    } else if (!hasSecret && !hasSecretFile) {
-      errors.push({ path: `${base}.secret`, message: 'missing "secret" (or "secret_file")' });
-    } else if (hasSecret) {
-      secret = rawProfile.secret ?? "";
-    } else {
-      const file = rawProfile.secret_file ?? "";
-      const read = ctx.readFile;
-      if (read === undefined) {
-        errors.push({
-          path: `${base}.secret_file`,
-          message: "secret_file is not supported in this context",
-        });
-      } else {
-        try {
-          secret = read(file).trim();
-        } catch (err) {
-          errors.push({
-            path: `${base}.secret_file`,
-            message: `cannot read secret_file "${file}": ${errorMessage(err)}`,
-          });
-        }
-      }
-    }
-
-    const secretPath = hasSecretFile && !hasSecret ? `${base}.secret_file` : `${base}.secret`;
-    if (secret !== "" && secret.length < MIN_SECRET_LENGTH) {
-      errors.push({
-        path: secretPath,
-        message: `secret is too short (${secret.length} chars, minimum ${MIN_SECRET_LENGTH})`,
-      });
-    }
+    const { secret, path: secretPath } = resolveSecret(rawProfile, base, ctx, errors);
     if (secret !== "") {
       const previousSecret = secrets.get(secret);
       if (previousSecret !== undefined) {
@@ -328,6 +352,21 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
     });
   }
 
+  // The management secret is a separate credential: a profile secret must never
+  // authorize management access, so the two may not coincide.
+  let management: Config["management"] = null;
+  if (data.management !== null) {
+    const { secret, path } = resolveSecret(data.management, "management", ctx, errors);
+    const sharedWith = secrets.get(secret);
+    if (secret !== "" && sharedWith !== undefined) {
+      errors.push({
+        path,
+        message: `management secret must differ from every profile secret (also used by profile "${sharedWith}")`,
+      });
+    }
+    management = { secret };
+  }
+
   if (data.default_profile !== null && !Object.hasOwn(data.profiles, data.default_profile)) {
     errors.push({ path: "default_profile", message: `unknown profile "${data.default_profile}"` });
   }
@@ -354,6 +393,7 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
     media: { maxBytes: data.media.max_bytes, retentionSeconds: data.media.retention_seconds },
     defaultProfile: data.default_profile,
     allowUnroutedOutbound: data.allow_unrouted_outbound,
+    management,
     profiles,
   };
   return { ok: true, config, warnings };

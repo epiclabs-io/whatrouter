@@ -15,6 +15,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PORT="${WHATROUTER_PORT:-8467}"
 SECRET_A="conformance-secret-a-0000000000000000"
 SECRET_B="conformance-secret-b-1111111111111111"
+MANAGEMENT_SECRET="conformance-management-2222222222222222"
 
 if [[ -z "${HERMES_CHECKOUT:-}" ]]; then
   echo "error: set HERMES_CHECKOUT to a hermes-agent checkout at $(cat "$ROOT/scripts/conformance/HERMES_PIN")" >&2
@@ -49,6 +50,8 @@ whatsapp:
   chunk_delay_ms: 0
 default_profile: null
 allow_unrouted_outbound: false
+management:
+  secret: ${MANAGEMENT_SECRET}
 profiles:
   a:
     gateway_id: gw-a
@@ -91,6 +94,7 @@ PYTHONPATH="$HERMES_CHECKOUT" \
 WHATROUTER_URL="http://127.0.0.1:${PORT}" \
 WR_SECRET_A="$SECRET_A" \
 WR_SECRET_B="$SECRET_B" \
+WR_MANAGEMENT_SECRET="$MANAGEMENT_SECRET" \
   uv run --quiet --python 3.13 --with websockets --with pyyaml --with httpx --no-project \
   python "$ROOT/scripts/conformance/probe.py"
 status=$?

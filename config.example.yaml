@@ -34,6 +34,14 @@ default_profile: null
 # Profiles may only act on chats routed to them unless this is true.
 allow_unrouted_outbound: false
 
+# Optional orchestrator API on GET /management (WebSocket, static bearer).
+# Omit the block to disable the route entirely. The secret must be >= 32 chars
+# and differ from every profile secret.
+# management:
+#   secret: ${WHATROUTER_MANAGEMENT_SECRET}
+#   # alternatively:
+#   # secret_file: /run/secrets/whatrouter-management
+
 profiles:
   work:
     gateway_id: gw-work

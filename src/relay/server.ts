@@ -2,6 +2,8 @@
  * The relay server: Node `http` + `ws`.
  *
  *   GET  /relay             WebSocket upgrade (HMAC bearer), one session per profile
+ *   GET  /management        WebSocket upgrade (static bearer), one orchestrator client;
+ *                           only when `management:` is configured, otherwise unknown path
  *   POST /relay/policy      gateway-pushed policy
  *   POST /relay/media       upload (raw body)
  *   GET  /relay/media/:id   download, scoped to the owning profile
@@ -12,6 +14,17 @@
  * Auth rejections on the upgrade are deliberately *not* HTTP 401: the gateway
  * only engages its backoff/relogin logic on WebSocket close code 4401, so we
  * complete the handshake and then close (reason `expired` vs `unauthorized`).
+ * `/management` follows the same pattern (always `unauthorized`: its secret is
+ * static), but its failures are deliberately not added to the relay throttle.
+ *
+ * Management holds: `close_profile` detaches a profile's relay session at once
+ * (later inbound buffers), closes its socket 1001 `closed by management`, and
+ * refuses that profile's reconnects with 1013 `profile temporarily suspended`
+ * for HOLD_MS. Wake pokes are suppressed meanwhile; at expiry one regular wake
+ * attempt is made if the profile is still offline with buffered work. Holds
+ * live only in memory: a restart clears them. Outbound actions the closed
+ * session already started cannot be cancelled; they may still reach WhatsApp,
+ * but their `outbound_result` is no longer sent.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -23,6 +36,9 @@ import { contentDisposition } from "./content-disposition.js";
 import { encodeFrame, LineAssembler, parseGatewayFrame } from "./ndjson.js";
 import { Session } from "./session.js";
 import { mediaUrl } from "./media-url.js";
+import { secretMatches } from "../management/auth.js";
+import { ManagementEndpoint, MANAGEMENT_MAX_MESSAGE_BYTES } from "../management/endpoint.js";
+import type { CloseProfileResult, FailureResult, PendingProfile } from "../management/frames.js";
 import { MediaTooLargeError, type Store } from "../store/db.js";
 import type { Config, ProfileConfig } from "../config/schema.js";
 import type { Logger } from "../util/log.js";
@@ -42,6 +58,12 @@ export interface RelayServerOptions {
   health: () => Record<string, unknown>;
   /** Unix seconds; injectable for tests. */
   now?: () => number;
+  /** Epoch milliseconds for management hold deadlines; injectable for tests. */
+  nowMs?: () => number;
+  /** Schedules a hold-expiry check; returns its cancel. Injectable for tests. */
+  scheduleHoldExpiry?: (fn: () => void, delayMs: number) => () => void;
+  /** Unread management output tolerated before closing that client 1013. */
+  managementMaxBufferedBytes?: number;
   /** Injectable for the wake poke. */
   fetchImpl?: typeof fetch;
   /** When present, enables `POST /debug/inbound` (WHATROUTER_FAKE_WHATSAPP=1). */
@@ -70,6 +92,37 @@ const WAKE_TIMEOUT_MS = 10_000;
 const MAINTENANCE_INTERVAL_MS = 3_600_000;
 const JSON_BODY_LIMIT = 1_048_576;
 const CLOSE_GRACE_MS = 2_000;
+/** Minimum time `close_profile` keeps a profile's relay reconnects refused. */
+export const HOLD_MS = 20_000;
+/** How long a detached relay socket gets to finish its close handshake. */
+const DETACH_GRACE_MS = 5_000;
+
+interface Hold {
+  untilMs: number;
+  cancel: () => void;
+}
+
+function defaultSchedule(fn: () => void, delayMs: number): () => void {
+  const timer = setTimeout(fn, delayMs);
+  timer.unref?.();
+  return () => clearTimeout(timer);
+}
+
+/** Closes `wss` without letting a non-cooperative client stall shutdown. */
+function closeWebSocketServer(wss: WebSocketServer): Promise<void> {
+  return new Promise<void>((resolvePromise) => {
+    const grace = setTimeout(() => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+    }, CLOSE_GRACE_MS);
+    grace.unref?.();
+    wss.close(() => {
+      clearTimeout(grace);
+      resolvePromise();
+    });
+  });
+}
 
 type AuthFailureReason =
   "missing_token" | "malformed" | "unknown_id" | "bad_signature" | "expired" | "throttled";
@@ -168,6 +221,8 @@ async function readBody(
 export function createRelayServer(opts: RelayServerOptions): RelayServer {
   const { config, store, log } = opts;
   const nowSeconds = opts.now ?? ((): number => Math.floor(Date.now() / 1000));
+  const nowMs = opts.nowMs ?? Date.now;
+  const scheduleHoldExpiry = opts.scheduleHoldExpiry ?? defaultSchedule;
   const doFetch = opts.fetchImpl ?? globalThis.fetch;
   const descriptor = buildDescriptor(config);
 
@@ -180,6 +235,9 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
 
   const sessions = new Map<string, SessionEntry>();
   const lastWake = new Map<string, number>();
+  const holds = new Map<string, Hold>();
+  /** Relay sockets detached by management, still finishing their close. */
+  const detached = new Set<WebSocket>();
   const throttle = new FailureThrottle();
   let boundPort: number | null = null;
   let boundHost: string | null = null;
@@ -220,6 +278,26 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     return { ok: false, reason };
   }
 
+  /**
+   * Static-secret check for `/management`; profile credentials never pass.
+   * Deliberately outside the relay's per-IP throttle: management failures must
+   * never turn into 4401s for relay reconnects sharing that IP (Hermes latches
+   * a repeated 4401 as revocation). Bad attempts are simply rejected.
+   */
+  function authenticateManagement(req: IncomingMessage, secret: string): boolean {
+    const ip = clientIp(req);
+    const token = parseBearer(req.headers.authorization);
+    if (token !== null && secretMatches(token, secret)) {
+      return true;
+    }
+    // Never log the token itself.
+    log.warn(
+      { path: req.url, ip, reason: token === null ? "missing_token" : "bad_secret" },
+      "management auth failure"
+    );
+    return false;
+  }
+
   function logAuthFailure(req: IncomingMessage, reason: AuthFailureReason): void {
     // Never log the token itself.
     log.warn(
@@ -250,6 +328,32 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
   // ----------------------------------------------------------------- upgrades
 
   const wss = new WebSocketServer({ noServer: true });
+  // Separate server and client set: management never counts as a relay session.
+  // The per-frame (per-line) limit is enforced by the endpoint; this only caps
+  // one WebSocket message, which may carry several coalesced frames.
+  const managementWss = new WebSocketServer({
+    noServer: true,
+    maxPayload: MANAGEMENT_MAX_MESSAGE_BYTES,
+  });
+  const management = new ManagementEndpoint({
+    log: log.child({ route: "/management" }),
+    pending: pendingSnapshot,
+    closeProfile,
+    ...(opts.managementMaxBufferedBytes === undefined
+      ? {}
+      : { maxBufferedBytes: opts.managementMaxBufferedBytes }),
+  });
+
+  /**
+   * Installed first thing on every upgraded socket, before any rejection path:
+   * a malformed frame (possibly already in the upgrade packet) makes `ws` emit
+   * `error`, and an `error` with no listener would crash the process.
+   */
+  function guardSocketErrors(ws: WebSocket, route: "relay" | "management"): void {
+    ws.on("error", (err) => {
+      log.debug({ route, err: String(err) }, "websocket error");
+    });
+  }
 
   function onUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     let pathname: string;
@@ -257,6 +361,19 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       pathname = new URL(req.url ?? "/", "http://relay.invalid").pathname;
     } catch {
       pathname = "/";
+    }
+    const managementSecret = config.management?.secret;
+    if (pathname === "/management" && managementSecret !== undefined) {
+      const authorized = authenticateManagement(req, managementSecret);
+      managementWss.handleUpgrade(req, socket, head, (ws) => {
+        guardSocketErrors(ws, "management");
+        if (!authorized) {
+          ws.close(4401, "unauthorized");
+          return;
+        }
+        management.attach(ws, clientIp(req));
+      });
+      return;
     }
     if (pathname !== "/relay") {
       log.warn({ path: req.url, ip: clientIp(req) }, "websocket upgrade on an unknown path");
@@ -269,10 +386,22 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     // The handshake is always completed: only a 4401 *close* engages the
     // gateway's relogin path (an HTTP 401 makes it retry blindly).
     wss.handleUpgrade(req, socket, head, (ws) => {
+      guardSocketErrors(ws, "relay");
       if (!outcome.ok) {
         logAuthFailure(req, outcome.reason);
         const reason = outcome.reason === "expired" ? "expired" : "unauthorized";
         ws.close(4401, reason);
+        return;
+      }
+      // Checked here, right before attaching, so no auth->attach race remains.
+      // 1013 = "try again later": not 4401 (Hermes latches on it) and not 1008
+      // (that reads as a duplicate session).
+      if (isHeld(outcome.profile.name)) {
+        log.info(
+          { profile: outcome.profile.name, ip: clientIp(req) },
+          "relay reconnect refused: profile is held by management"
+        );
+        ws.close(1013, "profile temporarily suspended");
         return;
       }
       attachSession(ws, outcome.profile, req);
@@ -398,11 +527,17 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
   }
 
   function handleHealth(res: ServerResponse): void {
-    const profiles: Record<string, { connected: boolean; buffered: number }> = {};
+    const profiles: Record<
+      string,
+      { connected: boolean; buffered: number; blockedUntilMs?: number }
+    > = {};
     for (const profile of config.profiles) {
+      const hold = holds.get(profile.name);
       profiles[profile.name] = {
         connected: sessions.has(profile.name),
         buffered: store.buffer.count(profile.name),
+        // Additive: present only while a management hold is in force.
+        ...(hold !== undefined && isHeld(profile.name) ? { blockedUntilMs: hold.untilMs } : {}),
       };
     }
     let extra: Record<string, unknown> = {};
@@ -550,6 +685,10 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     if (sessions.has(profile.name)) {
       return;
     }
+    // Suppressed, not spent: a held poke leaves the cooldown untouched.
+    if (isHeld(profile.name)) {
+      return;
+    }
     const now = nowSeconds();
     const last = lastWake.get(profile.name);
     if (last !== undefined && now - last < config.buffer.wakeCooldownSeconds) {
@@ -569,6 +708,100 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         log.info({ profile: profile.name, err: String(err) }, "wake poke failed");
       }
     })();
+  }
+
+  // --------------------------------------------------------------- management
+
+  function isHeld(profileName: string): boolean {
+    const hold = holds.get(profileName);
+    return hold !== undefined && nowMs() < hold.untilMs;
+  }
+
+  function pendingSnapshot(): PendingProfile[] {
+    const pending: PendingProfile[] = [];
+    for (const profile of config.profiles) {
+      const bufferedCount = store.buffer.count(profile.name);
+      if (bufferedCount > 0) {
+        pending.push({ profile: profile.name, gatewayId: profile.gatewayId, bufferedCount });
+      }
+    }
+    return pending;
+  }
+
+  /** Arms (or re-arms) the expiry check for `profile`'s current hold. */
+  function armHoldExpiry(profile: ProfileConfig, hold: Hold): void {
+    hold.cancel = scheduleHoldExpiry(
+      () => {
+        if (closed || holds.get(profile.name) !== hold) {
+          return; // replaced by a newer close_profile, or shutting down
+        }
+        if (nowMs() < hold.untilMs) {
+          armHoldExpiry(profile, hold); // the timer fired early
+          return;
+        }
+        holds.delete(profile.name);
+        // `wasEmpty` will not fire again for a buffer that is already non-empty,
+        // so this is the one chance to wake an agent that has work waiting.
+        if (!sessions.has(profile.name) && store.buffer.count(profile.name) > 0) {
+          maybeWake(profile);
+        }
+      },
+      Math.max(0, hold.untilMs - nowMs())
+    );
+  }
+
+  /** Gives a detached relay socket a bounded close handshake. */
+  function closeDetached(ws: WebSocket, code: number, reason: string): void {
+    detached.add(ws);
+    const grace = setTimeout(() => ws.terminate(), DETACH_GRACE_MS);
+    grace.unref?.();
+    ws.once("close", () => {
+      clearTimeout(grace);
+      detached.delete(ws);
+    });
+    try {
+      ws.close(code, reason);
+    } catch {
+      ws.terminate();
+    }
+  }
+
+  /**
+   * Synchronous by contract: when this returns, live delivery to the profile
+   * is already off, so the orchestrator may suspend the agent on the result.
+   */
+  function closeProfile(profileName: string): CloseProfileResult | FailureResult {
+    const profile = byName.get(profileName);
+    if (profile === undefined) {
+      return { success: false, error: "unknown profile" };
+    }
+
+    // 1. Hold first, so a reconnect racing this call is already refused.
+    const untilMs = nowMs() + HOLD_MS;
+    holds.get(profile.name)?.cancel();
+    const hold: Hold = { untilMs, cancel: () => undefined };
+    holds.set(profile.name, hold);
+    armHoldExpiry(profile, hold);
+
+    // 2-4. Detach now; the socket's own close handler keeps its identity guard.
+    const entry = sessions.get(profile.name);
+    if (entry !== undefined) {
+      sessions.delete(profile.name);
+      clearInterval(entry.ping);
+      entry.session.close();
+      closeDetached(entry.ws, 1001, "closed by management");
+    }
+    log.info(
+      { profile: profile.name, wasConnected: entry !== undefined, blockedUntilMs: untilMs },
+      "relay session closed by management"
+    );
+    return {
+      success: true,
+      profile: profile.name,
+      wasConnected: entry !== undefined,
+      blockedUntilMs: untilMs,
+      retryAfterMs: HOLD_MS,
+    };
   }
 
   // -------------------------------------------------------------- maintenance
@@ -628,6 +861,15 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       }
       closed = true;
       clearInterval(maintenanceTimer);
+      for (const hold of holds.values()) {
+        hold.cancel();
+      }
+      holds.clear();
+      management.close();
+      for (const ws of detached) {
+        ws.terminate();
+      }
+      detached.clear();
       for (const entry of sessions.values()) {
         clearInterval(entry.ping);
         entry.session.close();
@@ -638,9 +880,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         }
       }
       sessions.clear();
-      await new Promise<void>((resolvePromise) => {
-        wss.close(() => resolvePromise());
-      });
+      await Promise.all([closeWebSocketServer(wss), closeWebSocketServer(managementWss)]);
       await new Promise<void>((resolvePromise) => {
         let done = false;
         const finish = (): void => {
@@ -668,17 +908,27 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         log.warn({ profile: profileName }, "delivery for an unknown profile");
         return "unknown_profile";
       }
+      let outcome: "live" | "buffered";
       const entry = sessions.get(profileName);
       if (entry !== undefined) {
         const live = entry.session.canDeliverLive;
         entry.session.deliver(event);
-        return live ? "live" : "buffered";
+        outcome = live ? "live" : "buffered";
+      } else {
+        const { wasEmpty } = store.buffer.append(profileName, event, nowSeconds());
+        if (wasEmpty) {
+          maybeWake(profile);
+        }
+        outcome = "buffered";
       }
-      const { wasEmpty } = store.buffer.append(profileName, event, nowSeconds());
-      if (wasEmpty) {
-        maybeWake(profile);
-      }
-      return "buffered";
+      // After the outcome is settled; `publish` is best effort and never throws.
+      management.publish({
+        profile: profile.name,
+        gatewayId: profile.gatewayId,
+        messageId: event.message_id,
+        delivery: outcome,
+      });
+      return outcome;
     },
 
     isConnected(profileName) {

@@ -61,6 +61,7 @@ describe("defaults", () => {
     expect(config.media).toEqual({ maxBytes: 26214400, retentionSeconds: 604800 });
     expect(config.defaultProfile).toBeNull();
     expect(config.allowUnroutedOutbound).toBe(false);
+    expect(config.management).toBeNull();
     expect(config.profiles[0]).toMatchObject({
       name: "work",
       gatewayId: "gw-work",
@@ -440,5 +441,132 @@ describe("listen, public_url and relay url", () => {
       raw({ work: { gateway_id: "gw", secret: SECRET_A, wake_url: "nope", routes: [] } })
     );
     expect(find(list, "profiles.work.wake_url").message).toContain("expected an http(s) URL");
+  });
+});
+
+describe("management", () => {
+  const MGMT = "m".repeat(48);
+  const profiles = { work: { gateway_id: "gw-work", secret: SECRET_A, routes: [] } };
+
+  it("accepts an inline secret", () => {
+    const { config } = ok(raw(profiles, { management: { secret: MGMT } }));
+    expect(config.management).toEqual({ secret: MGMT });
+  });
+
+  it("interpolates ${ENV_VAR}", () => {
+    const { config } = ok(
+      raw(profiles, { management: { secret: "${WHATROUTER_MANAGEMENT_SECRET}" } }),
+      { env: { WHATROUTER_MANAGEMENT_SECRET: MGMT } }
+    );
+    expect(config.management).toEqual({ secret: MGMT });
+  });
+
+  it("reports an unset interpolation variable", () => {
+    const list = errors(raw(profiles, { management: { secret: "${MISSING_MGMT}" } }), {
+      env: {},
+    });
+    expect(find(list, "management.secret").message).toBe(
+      "environment variable MISSING_MGMT is not set"
+    );
+  });
+
+  it("reads secret_file and trims it", () => {
+    const { config } = ok(
+      raw(profiles, { management: { secret_file: "/run/secrets/whatrouter-management" } }),
+      {
+        readFile: (p) => {
+          if (p !== "/run/secrets/whatrouter-management") {
+            throw new Error("ENOENT");
+          }
+          return `  ${MGMT}\n`;
+        },
+      }
+    );
+    expect(config.management).toEqual({ secret: MGMT });
+  });
+
+  it("reports an unreadable secret_file", () => {
+    const list = errors(raw(profiles, { management: { secret_file: "/missing" } }), {
+      readFile: () => {
+        throw new Error("ENOENT");
+      },
+    });
+    expect(find(list, "management.secret_file").message).toContain(
+      'cannot read secret_file "/missing"'
+    );
+  });
+
+  it("requires exactly one of secret and secret_file", () => {
+    const both = errors(raw(profiles, { management: { secret: MGMT, secret_file: "/x" } }));
+    expect(find(both, "management.secret").message).toBe(
+      'set either "secret" or "secret_file", not both'
+    );
+    const neither = errors(raw(profiles, { management: {} }));
+    expect(find(neither, "management.secret").message).toBe('missing "secret" (or "secret_file")');
+  });
+
+  it("enforces the minimum secret length", () => {
+    const list = errors(raw(profiles, { management: { secret: "short" } }));
+    expect(find(list, "management.secret").message).toBe(
+      "secret is too short (5 chars, minimum 32)"
+    );
+    const fromFile = errors(raw(profiles, { management: { secret_file: "/s" } }), {
+      readFile: () => "tiny\n",
+    });
+    expect(find(fromFile, "management.secret_file").message).toContain("secret is too short");
+  });
+
+  it("rejects a management secret equal to a profile secret", () => {
+    const list = errors(raw(profiles, { management: { secret: SECRET_A } }));
+    expect(find(list, "management.secret").message).toBe(
+      'management secret must differ from every profile secret (also used by profile "work")'
+    );
+    const viaFile = errors(raw(profiles, { management: { secret_file: "/s" } }), {
+      readFile: () => `${SECRET_A}\n`,
+    });
+    expect(find(viaFile, "management.secret_file").message).toContain("must differ");
+  });
+
+  it("rejects unknown keys in the management block", () => {
+    const list = errors(raw(profiles, { management: { secret: MGMT, token: "x" } }));
+    expect(list.some((e) => e.path.startsWith("management") && /token/.test(e.message))).toBe(true);
+  });
+
+  it("rejects an empty inline secret or a blank secret_file", () => {
+    const inline = errors(raw(profiles, { management: { secret: "" } }));
+    expect(find(inline, "management.secret").message).toBe("secret is empty (minimum 32 chars)");
+    const whitespace = errors(raw(profiles, { management: { secret: " ".repeat(32) } }));
+    expect(find(whitespace, "management.secret").message).toBe(
+      "secret is empty (minimum 32 chars)"
+    );
+    const blank = errors(raw(profiles, { management: { secret_file: "/s" } }), {
+      readFile: () => "  \n",
+    });
+    expect(find(blank, "management.secret_file").message).toBe(
+      "secret is empty (minimum 32 chars)"
+    );
+    const viaEnv = errors(raw(profiles, { management: { secret: "${EMPTY}" } }), {
+      env: { EMPTY: "" },
+    });
+    expect(find(viaEnv, "management.secret").message).toContain("secret is empty");
+  });
+
+  it("rejects an empty profile secret too", () => {
+    const list = errors(raw({ work: { gateway_id: "gw", secret: "", routes: [] } }));
+    expect(find(list, "profiles.work.secret").message).toBe("secret is empty (minimum 32 chars)");
+    const whitespace = errors(
+      raw({ work: { gateway_id: "gw", secret: " ".repeat(32), routes: [] } })
+    );
+    expect(find(whitespace, "profiles.work.secret").message).toContain("secret is empty");
+  });
+
+  it("rejects an empty profile name, which could never be managed", () => {
+    const list = errors({ profiles: { "": { gateway_id: "gw", secret: SECRET_A, routes: [] } } });
+    expect(list.some((e) => e.message === "profile names must not be empty")).toBe(true);
+  });
+
+  it("treats an explicit null block as disabled", () => {
+    const { config } = ok(raw(profiles, { management: null }));
+    expect(config.management).toBeNull();
   });
 });
