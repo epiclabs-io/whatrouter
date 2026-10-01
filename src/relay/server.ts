@@ -24,7 +24,8 @@
  * attempt is made if the profile is still offline with buffered work. Holds
  * live only in memory: a restart clears them. Outbound actions the closed
  * session already started cannot be cancelled; they may still reach WhatsApp,
- * but their `outbound_result` is no longer sent.
+ * but their `outbound_result` is no longer sent. `release_profile` cancels only
+ * the reconnect hold; it does not wake the profile or alter the detached socket.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -38,7 +39,12 @@ import { Session } from "./session.js";
 import { mediaUrl } from "./media-url.js";
 import { secretMatches } from "../management/auth.js";
 import { ManagementEndpoint, MANAGEMENT_MAX_MESSAGE_BYTES } from "../management/endpoint.js";
-import type { CloseProfileResult, FailureResult, PendingProfile } from "../management/frames.js";
+import type {
+  CloseProfileResult,
+  FailureResult,
+  PendingProfile,
+  ReleaseProfileResult,
+} from "../management/frames.js";
 import { MediaTooLargeError, type Store } from "../store/db.js";
 import type { Config, ProfileConfig } from "../config/schema.js";
 import type { Logger } from "../util/log.js";
@@ -339,6 +345,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     log: log.child({ route: "/management" }),
     pending: pendingSnapshot,
     closeProfile,
+    releaseProfile,
     ...(opts.managementMaxBufferedBytes === undefined
       ? {}
       : { maxBufferedBytes: opts.managementMaxBufferedBytes }),
@@ -802,6 +809,23 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       blockedUntilMs: untilMs,
       retryAfterMs: HOLD_MS,
     };
+  }
+
+  /** Cancels only the reconnect hold; the orchestrator owns resume/wake policy. */
+  function releaseProfile(profileName: string): ReleaseProfileResult | FailureResult {
+    const profile = byName.get(profileName);
+    if (profile === undefined) {
+      return { success: false, error: "unknown profile" };
+    }
+
+    const hold = holds.get(profile.name);
+    const wasHeld = hold !== undefined && nowMs() < hold.untilMs;
+    if (hold !== undefined) {
+      hold.cancel();
+      holds.delete(profile.name);
+    }
+    log.info({ profile: profile.name, wasHeld }, "relay reconnect hold released by management");
+    return { success: true, profile: profile.name, wasHeld };
   }
 
   // -------------------------------------------------------------- maintenance

@@ -7,6 +7,7 @@
  *
  *   client -> server  {"type":"subscribe","requestId":"…","events":["message_pending"]}
  *                     {"type":"close_profile","requestId":"…","profile":"work"}
+ *                     {"type":"release_profile","requestId":"…","profile":"work"}
  *   server -> client  {"type":"result","requestId":"…","result":{"success":…}}
  *                     {"type":"event","event":"message_pending","data":{…}}
  *
@@ -37,7 +38,13 @@ export interface CloseProfileRequest {
   profile: string;
 }
 
-export type ManagementRequest = SubscribeRequest | CloseProfileRequest;
+export interface ReleaseProfileRequest {
+  type: "release_profile";
+  requestId: string;
+  profile: string;
+}
+
+export type ManagementRequest = SubscribeRequest | CloseProfileRequest | ReleaseProfileRequest;
 
 export type ParseOutcome =
   | { kind: "ok"; request: ManagementRequest }
@@ -110,6 +117,16 @@ export function parseManagementRequest(line: string): ParseOutcome {
       }
       return { kind: "ok", request: { type: "close_profile", requestId, profile } };
     }
+    case "release_profile": {
+      if (!hasOnlyKeys(value, ["type", "requestId", "profile"])) {
+        return fail("unexpected field");
+      }
+      const { profile } = value;
+      if (typeof profile !== "string" || profile.length === 0) {
+        return fail("profile must be a non-empty string");
+      }
+      return { kind: "ok", request: { type: "release_profile", requestId, profile } };
+    }
     default:
       return fail("unsupported request type");
   }
@@ -139,12 +156,20 @@ export interface CloseProfileResult {
   retryAfterMs: number;
 }
 
+export interface ReleaseProfileResult {
+  success: true;
+  profile: string;
+  /** Whether an active reconnect hold was cancelled by this request. */
+  wasHeld: boolean;
+}
+
 export interface FailureResult {
   success: false;
   error: string;
 }
 
-export type ManagementResult = SubscribeResult | CloseProfileResult | FailureResult;
+export type ManagementResult =
+  SubscribeResult | CloseProfileResult | ReleaseProfileResult | FailureResult;
 
 export interface ResultFrame {
   type: "result";

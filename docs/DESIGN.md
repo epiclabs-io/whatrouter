@@ -272,6 +272,13 @@ session`. WS ping every 30 s, 60 s pong timeout, independent of relay sessions.
   are not cancellable: they may complete on WhatsApp, but `Session.close()` suppresses their
   `outbound_result`, and frames still arriving on the old socket are ignored.
 
+- **`release_profile`** `{profile}` → `{success, profile, wasHeld}` or
+  `{success:false,error:"unknown profile"}`. For a known profile it synchronously cancels and
+  deletes the current hold before writing the result. `wasHeld:false` makes a missing, expired or
+  already-released hold idempotent. It does not reconnect Hermes, touch the detached old socket,
+  clear buffered messages or call `wake_url`; the orchestrator owns abort/resume policy. A relay
+  upgrade already refused with 1013 stays refused, while future attempts are accepted immediately.
+
 - **Hold.** Checked after successful relay auth, right before `attachSession()` (same tick, so no
   auth→attach race): while `nowMs < blockedUntilMs` the upgrade is completed and closed
   `1013 profile temporarily suspended` — not 4401 (Hermes would latch it as revocation) and not
@@ -283,6 +290,8 @@ session`. WS ping every 30 s, 60 s pong timeout, independent of relay sessions.
   hold (rescheduled if it fires early, ignored if superseded) deletes the hold and, if the profile
   is still disconnected with a non-empty buffer, calls `maybeWake()` once (normal cooldown
   applies) — `wasEmpty` cannot be relied on because the buffer is usually already non-empty.
+  Manual `release_profile` deliberately cancels this timer without waking; if a later message is
+  the first buffered row, the normal disconnected-delivery wake path still applies.
 - **Shutdown.** Cancel hold timers, close management `1001 going away`, terminate detached relay
   sockets, close relay sessions `1001`, then close both WebSocket servers with a 2 s grace after
   which remaining clients are terminated.

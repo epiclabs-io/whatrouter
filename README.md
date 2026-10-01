@@ -363,6 +363,10 @@ frame may be split across, or share, WebSocket messages. Every request carries a
 -> {"type":"close_profile","requestId":"close-1","profile":"work"}
 <- {"type":"result","requestId":"close-1","result":{"success":true,"profile":"work",
     "wasConnected":true,"blockedUntilMs":1790870420123,"retryAfterMs":20000}}
+
+-> {"type":"release_profile","requestId":"release-1","profile":"work"}
+<- {"type":"result","requestId":"release-1","result":{"success":true,"profile":"work",
+    "wasHeld":true}}
 ```
 
 (Wrapped here for reading; on the wire each frame is a single line.)
@@ -381,6 +385,11 @@ frame may be split across, or share, WebSocket messages. Every request carries a
   agent as soon as it arrives. A known but already-disconnected profile also succeeds
   (`wasConnected:false`) and still starts the hold; every successful call restarts the full 20 s.
   An unknown profile answers `{"success":false,"error":"unknown profile"}`.
+- `release_profile` cancels an active reconnect hold early. A known profile always succeeds:
+  `wasHeld:true` means this request cancelled an active hold; `false` makes retries idempotent.
+  It permits future reconnect attempts but does not dial Hermes itself, alter the detached old
+  socket, clear buffered messages, or invoke `wake_url`. An attempt already refused with `1013`
+  remains refused; Hermes enters on its next retry. Unknown profiles fail as above.
 - Any other problem with a request that has a valid `requestId` is answered with
   `{"success":false,"error":"…"}`.
 
@@ -400,8 +409,10 @@ oversized `requestId`), `1003 text frames only` (binary message), `1009` (a sing
 the hold are closed `1013 profile temporarily suspended`. Hermes treats both as retryable (it
 latches only on `4401`), so it keeps re-dialing with backoff and reconnects by itself once the
 hold ends, replaying everything buffered meanwhile. During the hold `wake_url` pokes are
-suppressed; when the hold ends, if the profile is still offline with buffered messages, one normal
-wake poke is sent (subject to `buffer.wake_cooldown_seconds`).
+suppressed; when the hold expires naturally, if the profile is still offline with buffered
+messages, one normal wake poke is sent (subject to `buffer.wake_cooldown_seconds`). A manual
+`release_profile` does not send this poke because the orchestrator owns the decision to abort or
+resume the container.
 
 **Caveats.** Holds live in memory only: restarting WhatRouter clears them, and the agent may
 reconnect immediately. Outbound actions the agent had already started when its session was closed
@@ -414,8 +425,9 @@ the agent.
    listed in `pending`.
 2. When an agent has been idle long enough, send `close_profile` for it. Once the result arrives,
    suspend its container; new messages now buffer.
-3. On a `message_pending` event for a suspended profile, resume its container. Hermes reconnects
-   once the hold has passed (`blockedUntilMs`) and drains the buffer.
+3. If `message_pending` arrives while suspension is still in progress, send `release_profile` and
+   abort the suspension. If the container is already suspended, resume it and optionally release
+   the hold rather than waiting until `blockedUntilMs`. Hermes drains the buffer after reconnecting.
 4. After reconnecting the management socket, `subscribe` again and use `pending` to catch up.
 
 | Symptom                                                  | Cause and fix                                                                                                                                                                                                                                                          |

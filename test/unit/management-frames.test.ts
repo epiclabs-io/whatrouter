@@ -28,6 +28,9 @@ describe("parseManagementRequest", () => {
     expect(
       parseManagementRequest(line({ type: "close_profile", requestId: "c", profile }))
     ).toEqual({ kind: "ok", request: { type: "close_profile", requestId: "c", profile } });
+    expect(
+      parseManagementRequest(line({ type: "release_profile", requestId: "r", profile }))
+    ).toEqual({ kind: "ok", request: { type: "release_profile", requestId: "r", profile } });
   });
 
   it("parses close_profile", () => {
@@ -36,6 +39,15 @@ describe("parseManagementRequest", () => {
     ).toEqual({
       kind: "ok",
       request: { type: "close_profile", requestId: "c1", profile: "work" },
+    });
+  });
+
+  it("parses release_profile", () => {
+    expect(
+      parseManagementRequest(line({ type: "release_profile", requestId: "r1", profile: "work" }))
+    ).toEqual({
+      kind: "ok",
+      request: { type: "release_profile", requestId: "r1", profile: "work" },
     });
   });
 
@@ -55,6 +67,16 @@ describe("parseManagementRequest", () => {
       ],
       [{ type: "close_profile", requestId: "r", profile: 7 }, "profile must be a non-empty string"],
       [{ type: "close_profile", requestId: "r" }, "profile must be a non-empty string"],
+      [
+        { type: "release_profile", requestId: "r", profile: "" },
+        "profile must be a non-empty string",
+      ],
+      [
+        { type: "release_profile", requestId: "r", profile: 7 },
+        "profile must be a non-empty string",
+      ],
+      [{ type: "release_profile", requestId: "r" }, "profile must be a non-empty string"],
+      [{ type: "release_profile", requestId: "r", profile: "work", extra: 1 }, "unexpected field"],
     ];
     for (const [value, error] of cases) {
       expect(parseManagementRequest(line(value)), JSON.stringify(value)).toEqual({
@@ -96,6 +118,18 @@ describe("encodeManagementFrame", () => {
       })
     ).toBe(
       '{"type":"result","requestId":"r","result":{"success":false,"error":"unknown profile"}}\n'
+    );
+  });
+
+  it("encodes a release result", () => {
+    expect(
+      encodeManagementFrame({
+        type: "result",
+        requestId: "r",
+        result: { success: true, profile: "work", wasHeld: true },
+      })
+    ).toBe(
+      '{"type":"result","requestId":"r","result":{"success":true,"profile":"work","wasHeld":true}}\n'
     );
   });
 });

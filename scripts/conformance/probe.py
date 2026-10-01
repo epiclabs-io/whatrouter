@@ -6,9 +6,10 @@ WhatRouter with ``WHATROUTER_FAKE_WHATSAPP=1``: handshake and descriptor,
 per-profile routing and isolation, the relevance gate, every outbound op's
 result shape, media re-hosting through ``gateway.relay.media.RelayMediaClient``,
 and the going_idle / buffered-replay / reconnect state machine. Finally the
-management route: ``close_profile`` on a live Hermes transport, which must see
-``1013`` during the hold as retryable (never a revocation latch) and reconnect
-by itself afterwards, replaying what was buffered meanwhile.
+management route: ``close_profile`` on a live Hermes transport, followed by
+``release_profile`` to cancel the hold early. Hermes must treat ``1013`` as
+retryable (never a revocation latch), reconnect before the original deadline,
+and replay what was buffered meanwhile.
 
 Run it through ``scripts/conformance/run.sh`` (which starts the server and
 supplies the environment). Exits 1 if any check fails.
@@ -33,7 +34,6 @@ GW_B = os.environ.get("WR_GATEWAY_B", "gw-b")
 SECRET_A = os.environ.get("WR_SECRET_A", "")
 SECRET_B = os.environ.get("WR_SECRET_B", "")
 MANAGEMENT_SECRET = os.environ.get("WR_MANAGEMENT_SECRET", "")
-HOLD_S = 20.0
 
 ALICE = "+34600000001"
 ALICE_JID = "34600000001@s.whatsapp.net"
@@ -370,17 +370,35 @@ async def main() -> int:  # noqa: PLR0915 - a linear probe reads better than hel
               and "blockedUntilMs" in health["profiles"]["b"], json.dumps(health))
 
         post_inbound({"chatId": BOB, "text": "while held", "messageId": "m-held"})
-        # Hermes re-dials on its own and is refused 1013 until the hold lapses.
-        await asyncio.sleep(HOLD_S / 2)
+        event = json.loads(str(await asyncio.wait_for(mgmt.recv(), 5)).strip())
+        check("management: buffered message publishes message_pending",
+              event.get("type") == "event" and event.get("event") == "message_pending"
+              and event.get("data", {}).get("profile") == "b"
+              and event.get("data", {}).get("delivery") == "buffered", json.dumps(event))
+
+        # Let Hermes encounter at least one 1013 before cancelling the hold.
+        await asyncio.sleep(1.5)
         health = get_json("/healthz")
         check("Hermes stays refused during the hold",
               health["profiles"]["b"].get("connected") is False, json.dumps(health))
         check("1013 does not latch a revocation in Hermes", not tb.auth_revoked)
 
-        deadline = time.time() + HOLD_S + 40
+        blocked_until_s = res["blockedUntilMs"] / 1000
+        released = await request(
+            {"type": "release_profile", "requestId": "r1", "profile": "b"}
+        )
+        check("management: release_profile cancels the active hold",
+              released.get("success") is True and released.get("wasHeld") is True,
+              json.dumps(released))
+        health = get_json("/healthz")
+        check("healthz drops blockedUntilMs immediately on release",
+              "blockedUntilMs" not in health["profiles"]["b"], json.dumps(health))
+
+        # Stop before natural expiry so this specifically proves release worked.
+        deadline = blocked_until_s - 1.0
         while time.time() < deadline and not get_json("/healthz")["profiles"]["b"]["connected"]:
             await asyncio.sleep(0.5)
-        check("Hermes reconnects by itself after the hold",
+        check("Hermes reconnects by itself before the original hold deadline",
               get_json("/healthz")["profiles"]["b"]["connected"] is True)
         e = await drain(b_inbox, timeout=10)
         check("the message buffered during the hold replays after reconnect",

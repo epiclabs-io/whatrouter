@@ -50,6 +50,7 @@ function setup(maxBufferedBytes?: number): { endpoint: ManagementEndpoint; ws: F
     log: silentLogger(),
     pending: () => [],
     closeProfile: () => ({ success: false, error: "unknown profile" }),
+    releaseProfile: (profile) => ({ success: true, profile, wasHeld: true }),
     ...(maxBufferedBytes === undefined ? {} : { maxBufferedBytes }),
   });
   const ws = new FakeSocket();
@@ -101,6 +102,7 @@ describe("ManagementEndpoint", () => {
           bufferedCount: 1,
         })),
       closeProfile: () => ({ success: false, error: "unknown profile" }),
+      releaseProfile: (profile) => ({ success: true, profile, wasHeld: false }),
       maxBufferedBytes: 1024,
     });
     const ws = new FakeSocket();
@@ -122,6 +124,18 @@ describe("ManagementEndpoint", () => {
     const { endpoint, ws } = setup();
     endpoint.publish(DATA);
     expect(ws.sent).toEqual([]);
+  });
+
+  it("dispatches release_profile and correlates its result", () => {
+    const { ws } = setup();
+    ws.input('{"type":"release_profile","requestId":"r1","profile":"work"}\n');
+    expect(ws.frames()).toEqual([
+      {
+        type: "result",
+        requestId: "r1",
+        result: { success: true, profile: "work", wasHeld: true },
+      },
+    ]);
   });
 
   it("frees the singleton slot when the client closes", () => {

@@ -1,7 +1,7 @@
 /**
  * The single management connection behind `GET /management`. Owns its own
  * framing, subscription and heartbeat; knows nothing about relay sessions
- * beyond the two callbacks the relay server hands it.
+ * beyond the callbacks the relay server hands it.
  *
  * Guarantees:
  *   - at most one connection; a second authenticated one is closed 1008
@@ -25,6 +25,7 @@ import {
   type ManagementServerFrame,
   type MessagePendingData,
   type PendingProfile,
+  type ReleaseProfileResult,
 } from "./frames.js";
 
 /** Largest single NDJSON frame (assembled line), in UTF-8 bytes. */
@@ -41,6 +42,8 @@ export interface ManagementEndpointOptions {
   pending: () => PendingProfile[];
   /** Detaches the profile's relay session and starts/resets its hold. */
   closeProfile: (profile: string) => CloseProfileResult | FailureResult;
+  /** Cancels the profile's reconnect hold without waking or reconnecting it. */
+  releaseProfile: (profile: string) => ReleaseProfileResult | FailureResult;
   /** Outgoing bytes the client may leave unread before it is closed 1013. */
   maxBufferedBytes?: number;
 }
@@ -232,6 +235,17 @@ export class ManagementEndpoint {
           result = this.#opts.closeProfile(request.profile);
         } catch (err: unknown) {
           log.error({ err: String(err) }, "management close_profile failed");
+          result = { success: false, error: "internal error" };
+        }
+        this.#result(conn, request.requestId, result);
+        return;
+      }
+      case "release_profile": {
+        let result: ReleaseProfileResult | FailureResult;
+        try {
+          result = this.#opts.releaseProfile(request.profile);
+        } catch (err: unknown) {
+          log.error({ err: String(err) }, "management release_profile failed");
           result = { success: false, error: "internal error" };
         }
         this.#result(conn, request.requestId, result);

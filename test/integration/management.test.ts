@@ -137,6 +137,10 @@ class Manager extends Client {
     return this.request({ type: "close_profile", requestId, profile });
   }
 
+  releaseProfile(requestId: string, profile: string) {
+    return this.request({ type: "release_profile", requestId, profile });
+  }
+
   events(): Record<string, unknown>[] {
     return this.of("event");
   }
@@ -729,6 +733,86 @@ describe("close_profile", () => {
     back.send({ type: "inbound_ack", bufferId: second.bufferId as string });
     await delay(50);
     expect(fixture.server.bufferedCount("work")).toBe(0);
+  });
+});
+
+describe("release_profile", () => {
+  it("cancels an active hold and permits an immediate reconnect without waking", async () => {
+    const relay = new Relay(fixture.port, WORK);
+    await relay.hello();
+    const manager = new Manager(fixture.port);
+    await manager.closeProfile("c1", "work");
+    await relay.closed();
+    fixture.server.deliver("work", testEvent("release me"));
+
+    expect(await manager.releaseProfile("r1", "work")).toEqual({
+      success: true,
+      profile: "work",
+      wasHeld: true,
+    });
+    expect((await health()).work).toEqual({ connected: false, buffered: 1 });
+    expect(fixture.fetchMock).not.toHaveBeenCalled();
+    expect(fixture.timers.every((timer) => timer.cancelled)).toBe(true);
+
+    const fresh = new Relay(fixture.port, WORK);
+    await fresh.hello();
+    const replay = await fresh.waitFor((frame) => frame.type === "inbound");
+    expect((replay.event as { text: string }).text).toBe("release me");
+    fresh.send({ type: "inbound_ack", bufferId: replay.bufferId as string });
+    advanceTo(START_MS + HOLD_MS);
+    await delay(20);
+    expect(fixture.fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("is idempotent and rejects only unknown profiles", async () => {
+    const manager = new Manager(fixture.port);
+    expect(await manager.releaseProfile("r1", "home")).toEqual({
+      success: true,
+      profile: "home",
+      wasHeld: false,
+    });
+    await manager.closeProfile("c1", "home");
+    expect(await manager.releaseProfile("r2", "home")).toMatchObject({ wasHeld: true });
+    expect(await manager.releaseProfile("r3", "home")).toEqual({
+      success: true,
+      profile: "home",
+      wasHeld: false,
+    });
+    expect(await manager.releaseProfile("r4", "nobody")).toEqual({
+      success: false,
+      error: "unknown profile",
+    });
+  });
+
+  it("does not let the detached old socket remove the released replacement", async () => {
+    const old = new Relay(fixture.port, WORK);
+    await old.hello();
+    const rawSocket = (old.ws as unknown as { _socket: { pause(): void; resume(): void } })._socket;
+    rawSocket.pause();
+    const manager = new Manager(fixture.port);
+    await manager.closeProfile("c1", "work");
+    await manager.releaseProfile("r1", "work");
+
+    const fresh = new Relay(fixture.port, WORK);
+    await fresh.hello();
+    rawSocket.resume();
+    await old.closed();
+    await delay(50);
+    expect(fixture.server.isConnected("work")).toBe(true);
+    expect(fixture.server.deliver("work", testEvent("fresh"))).toBe("live");
+    await fresh.waitFor((frame) => frame.type === "inbound");
+  });
+
+  it("does not wake on release, but a later first buffered message wakes normally", async () => {
+    const manager = new Manager(fixture.port);
+    await manager.closeProfile("c1", "work");
+    await manager.releaseProfile("r1", "work");
+    await delay(20);
+    expect(fixture.fetchMock).not.toHaveBeenCalled();
+
+    fixture.server.deliver("work", testEvent("after release"));
+    await delay(20);
+    expect(fixture.fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
