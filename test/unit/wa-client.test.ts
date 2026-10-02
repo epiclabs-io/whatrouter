@@ -337,6 +337,149 @@ describe("createBaileysClient: outbound", () => {
   });
 });
 
+describe("createBaileysClient: group management", () => {
+  it("normalizes metadata and fetches the invite code separately", async () => {
+    const h = await connected();
+    const socket = h.sockets[0]?.socket;
+    if (socket === undefined) {
+      throw new Error("missing fake socket");
+    }
+    socket.groupMetadata = vi.fn(async (jid: string) => ({
+      id: jid,
+      subject: "Managed",
+      desc: "Description",
+      owner: "99988877766655@lid",
+      ownerPn: "34611111111:4@s.whatsapp.net",
+      size: 2,
+      announce: true,
+      restrict: true,
+      ephemeralDuration: 604800,
+      memberAddMode: true,
+      joinApprovalMode: true,
+      participants: [
+        {
+          id: "99988877766655@lid",
+          phoneNumber: "34611111111:8@s.whatsapp.net",
+          admin: "superadmin" as const,
+        },
+        { id: "34622222222:3@s.whatsapp.net", admin: null },
+      ],
+    }));
+    socket.groupInviteCode = vi.fn(async () => "CURRENT");
+
+    await expect(h.client.getGroupMetadata("120363001234567890:2@g.us")).resolves.toEqual({
+      id: "120363001234567890@g.us",
+      subject: "Managed",
+      description: "Description",
+      owner: "34611111111@s.whatsapp.net",
+      participants: [
+        { id: "34611111111@s.whatsapp.net", admin: "superadmin" },
+        { id: "34622222222@s.whatsapp.net", admin: null },
+      ],
+      size: 2,
+      inviteCode: "CURRENT",
+      announcement: true,
+      restrict: true,
+      ephemeralDuration: 604800,
+      memberAddMode: "all",
+      joinApprovalMode: true,
+    });
+    expect(socket.groupMetadata).toHaveBeenCalledWith("120363001234567890@g.us");
+    expect(socket.groupInviteCode).toHaveBeenCalledWith("120363001234567890@g.us");
+  });
+
+  it("invalidates cached metadata on group and participant updates", async () => {
+    const h = await connected();
+    const socket = h.sockets[0]?.socket;
+    const events = h.sockets[0]?.ev;
+    if (socket === undefined || events === undefined) {
+      throw new Error("missing fake socket");
+    }
+    socket.groupMetadata = vi.fn(async (jid: string) => ({
+      id: jid,
+      subject: "Cached",
+      owner: undefined,
+      participants: [],
+    }));
+    await h.client.getGroupMetadata("1@g.us");
+    await h.client.getGroupMetadata("1@g.us");
+    expect(socket.groupMetadata).toHaveBeenCalledTimes(1);
+    events.emit("groups.update", [{ id: "1:2@g.us", subject: "Changed" }]);
+    await h.client.getGroupMetadata("1@g.us");
+    expect(socket.groupMetadata).toHaveBeenCalledTimes(2);
+    events.emit("group-participants.update", { id: "1:3@g.us", participants: [], action: "add" });
+    await h.client.getGroupMetadata("1@g.us");
+    expect(socket.groupMetadata).toHaveBeenCalledTimes(3);
+  });
+
+  it("returns metadata when invite-code retrieval fails", async () => {
+    const h = await connected();
+    const socket = h.sockets[0]?.socket;
+    if (socket === undefined) {
+      throw new Error("missing fake socket");
+    }
+    socket.groupInviteCode = vi.fn(async () => {
+      throw new Error("not an admin");
+    });
+    await expect(h.client.getGroupMetadata("1@g.us")).resolves.toMatchObject({
+      id: "1@g.us",
+      subject: "Test Group",
+      participants: [],
+      inviteCode: null,
+    });
+  });
+
+  it("normalizes participant operations and maps group setting values", async () => {
+    const h = await connected();
+    const socket = h.sockets[0]?.socket;
+    if (socket === undefined) {
+      throw new Error("missing fake socket");
+    }
+    socket.groupParticipantsUpdate = vi.fn(async (_jid, participants) =>
+      participants.map((jid: string) => ({ jid, status: "200", content: {} }))
+    );
+    socket.groupRequestParticipantsList = vi.fn(async () => [
+      { jid: "34633333333:4@s.whatsapp.net", request_method: "invite_link" },
+    ]);
+    socket.groupSettingUpdate = vi.fn(async () => undefined);
+    socket.groupMemberAddMode = vi.fn(async () => undefined);
+    socket.groupJoinApprovalMode = vi.fn(async () => undefined);
+
+    const group = "120363001234567890:2@g.us";
+    expect(
+      await h.client.updateGroupParticipants(group, ["34622222222:3@s.whatsapp.net"], "promote")
+    ).toEqual([{ participantId: "34622222222@s.whatsapp.net", status: "200" }]);
+    expect(await h.client.listPendingGroupJoinRequests(group)).toEqual([
+      { participantId: "34633333333@s.whatsapp.net", method: "invite_link" },
+    ]);
+    await h.client.setGroupAnnouncement(group, true);
+    await h.client.setGroupRestrict(group, false);
+    await h.client.setGroupMemberAddMode(group, "all");
+    await h.client.setGroupJoinApprovalMode(group, true);
+
+    expect(socket.groupParticipantsUpdate).toHaveBeenCalledWith(
+      "120363001234567890@g.us",
+      ["34622222222@s.whatsapp.net"],
+      "promote"
+    );
+    expect(socket.groupSettingUpdate).toHaveBeenNthCalledWith(
+      1,
+      "120363001234567890@g.us",
+      "announcement"
+    );
+    expect(socket.groupSettingUpdate).toHaveBeenNthCalledWith(
+      2,
+      "120363001234567890@g.us",
+      "unlocked"
+    );
+    expect(socket.groupMemberAddMode).toHaveBeenCalledWith(
+      "120363001234567890@g.us",
+      "all_member_add"
+    );
+    expect(socket.groupJoinApprovalMode).toHaveBeenCalledWith("120363001234567890@g.us", "on");
+  });
+});
+
 describe("createBaileysClient: reconnection", () => {
   it("goes unpaired without reconnecting when WhatsApp logs us out", async () => {
     const h = await connected();

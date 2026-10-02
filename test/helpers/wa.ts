@@ -54,6 +54,7 @@ export function testConfig(overrides: Partial<Config["whatsapp"]> = {}): Config 
     defaultProfile: null,
     allowUnroutedOutbound: false,
     management: null,
+    groups: {},
     profiles: [],
   };
 }
@@ -137,6 +138,39 @@ export function createFakeSocket(opts: FakeSocketOptions = {}): FakeSocket {
           participants: [],
         } as unknown as GroupMetadata;
       },
+      async groupCreate(subject, participants): Promise<GroupMetadata> {
+        return {
+          id: "120363009999999999@g.us",
+          subject,
+          owner: BOT_PN,
+          participants: participants.map((id) => ({ id, admin: null })),
+        };
+      },
+      async groupLeave(): Promise<void> {},
+      async groupUpdateSubject(): Promise<void> {},
+      async groupRequestParticipantsList(): Promise<Record<string, string>[]> {
+        return [];
+      },
+      async groupRequestParticipantsUpdate(_jid, participants) {
+        return participants.map((jid) => ({ jid, status: "200" }));
+      },
+      async groupParticipantsUpdate(_jid, participants) {
+        return participants.map((jid) => ({ jid, status: "200", content: {} }));
+      },
+      async groupUpdateDescription(): Promise<void> {},
+      async groupInviteCode(): Promise<string> {
+        return "invite-code";
+      },
+      async groupRevokeInvite(): Promise<string> {
+        return "new-invite-code";
+      },
+      async groupAcceptInvite(): Promise<string> {
+        return "120363009999999999@g.us";
+      },
+      async groupToggleEphemeral(): Promise<void> {},
+      async groupSettingUpdate(): Promise<void> {},
+      async groupMemberAddMode(): Promise<void> {},
+      async groupJoinApprovalMode(): Promise<void> {},
       async updateMediaMessage(msg): Promise<WAMessage> {
         return msg;
       },
