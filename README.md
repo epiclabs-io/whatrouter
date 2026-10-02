@@ -464,31 +464,31 @@ the agent.
 `Authorization: Bearer <management secret>`. Sessions expire after 15 minutes idle and the server
 allows at most 32 at once. These methods are MCP transport operations, not REST resources.
 
-| Tool                         | Semantics                                                                                                            |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `list_groups`                | List the config registry only; it does not discover or list every WhatsApp group.                                    |
-| `get_group`                  | Return registry data and live WhatsApp metadata for a registered group.                                              |
-| `register_group`             | Add a known group JID to the registry; defaults `listen` using the sole-admin rule above.                            |
-| `update_group`               | Change a registered group's config `display_name`.                                                                   |
-| `forget_group`               | Remove registry policy without leaving the WhatsApp group or changing profile routes.                                |
-| `get_listen_list`            | Read a registered group's account-wide sender gate.                                                                  |
-| `set_listen_list`            | Replace that gate and mark its source `explicit`; `"*"` must be the sole entry.                                      |
-| `list_group_members`         | Return live participants and admin roles for a registered group.                                                     |
-| `modify_group_members`       | Add, remove, promote, or demote listed users in a registered group.                                                  |
-| `list_group_join_requests`   | Return live pending join requests for a registered group.                                                            |
-| `review_group_join_requests` | Approve or reject listed pending requests.                                                                           |
-| `get_group_invite_code`      | Return the current invite code, or null.                                                                             |
-| `revoke_group_invite_code`   | Revoke the old invite code and return its replacement.                                                               |
-| `join_group_by_invite`       | Join using an invite code; does not register or route the joined group.                                              |
-| `create_group`               | Create a group with optional participants; does not register or route it.                                            |
-| `leave_group`                | Leave a registered group and optionally forget its registry entry after success.                                     |
-| `update_group_settings`      | Change subject, description, announcement/restriction, disappearing messages, member-add, or join-approval settings. |
-| `list_profiles`              | List live configured profile data with secrets removed.                                                              |
-| `create_profile`             | Generate a profile and return new relay credentials and environment lines.                                           |
-| `delete_profile`             | Close and delete a profile; refuses the last profile and repairs `default_profile` if needed.                        |
-| `close_profile`              | Close its relay socket and start/reset the same 20-second reconnect hold as the WebSocket command.                   |
-| `release_profile`            | Cancel that hold without reconnecting or waking Hermes.                                                              |
-| `get_health`                 | Return router version, WhatsApp state, relay connections, holds, and buffer counts.                                  |
+| Tool                         | Semantics                                                                                                                                                                           |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_groups`                | List the config registry only; it does not discover or list every WhatsApp group.                                                                                                   |
+| `get_group`                  | Return registry data and live WhatsApp metadata for a registered group.                                                                                                             |
+| `register_group`             | Add a known group JID to the registry; defaults `listen` using the sole-admin rule above (live lookup). With an explicit `listen`, no WhatsApp lookup is made, so it works offline. |
+| `update_group`               | Change a registered group's config `display_name`.                                                                                                                                  |
+| `forget_group`               | Remove registry policy without leaving the WhatsApp group or changing profile routes.                                                                                               |
+| `get_listen_list`            | Read a registered group's account-wide sender gate.                                                                                                                                 |
+| `set_listen_list`            | Replace that gate and mark its source `explicit`; `"*"` must be the sole entry.                                                                                                     |
+| `list_group_members`         | Return live participants and admin roles for a registered group.                                                                                                                    |
+| `modify_group_members`       | Add, remove, promote, or demote listed users in a registered group.                                                                                                                 |
+| `list_group_join_requests`   | Return live pending join requests for a registered group.                                                                                                                           |
+| `review_group_join_requests` | Approve or reject listed pending requests.                                                                                                                                          |
+| `get_group_invite_code`      | Return the current invite code, or null.                                                                                                                                            |
+| `revoke_group_invite_code`   | Revoke the old invite code and return its replacement.                                                                                                                              |
+| `join_group_by_invite`       | Join using an invite code; does not register or route the joined group.                                                                                                             |
+| `create_group`               | Create a group with optional participants; does not register or route it.                                                                                                           |
+| `leave_group`                | Leave a registered group and optionally forget its registry entry after success.                                                                                                    |
+| `update_group_settings`      | Change subject, description, announcement/restriction, disappearing messages, member-add, or join-approval settings.                                                                |
+| `list_profiles`              | List live configured profile data with secrets removed.                                                                                                                             |
+| `create_profile`             | Generate a profile and return new relay credentials and environment lines.                                                                                                          |
+| `delete_profile`             | Close and delete a profile; refuses the last profile and repairs `default_profile` if needed.                                                                                       |
+| `close_profile`              | Close its relay socket and start/reset the same 20-second reconnect hold as the WebSocket command.                                                                                  |
+| `release_profile`            | Cancel that hold without reconnecting or waking Hermes.                                                                                                                             |
+| `get_health`                 | Return router version, WhatsApp state, relay connections, holds, and buffer counts.                                                                                                 |
 
 WhatsApp exposes no group deletion operation here: use `leave_group`, optionally with `forget`,
 or `forget_group` without leaving. There is also deliberately no WhatsApp group discovery or

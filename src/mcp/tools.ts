@@ -216,7 +216,7 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
   );
   tool(
     "register_group",
-    "Register a WhatsApp group for routing policy.",
+    "Register a WhatsApp group for routing policy. Without listen, the sole-admin default is computed from live metadata; with listen, no WhatsApp lookup is made.",
     {
       group_id: groupIdSchema,
       display_name: z.string().nullable().optional(),
@@ -225,22 +225,28 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
     configWrite,
     async ({ group_id, display_name, listen }) => {
       const id = groupId(group_id);
-      const metadata = await opts.whatsapp.getGroupMetadata(id);
-      const admins = metadata.participants.filter((p) => p.admin !== null);
-      const botIds = new Set(opts.whatsapp.botIds());
-      const selected =
-        listen === undefined
-          ? admins.length === 1 && botIds.has(admins[0]?.id ?? "")
-            ? ["*"]
-            : []
-          : persistedIdentities(listen);
+      // An explicit listen list makes this a pure config write: no live lookup, so groups
+      // can be registered while WhatsApp is disconnected (e.g. during migration).
+      let subject: string | null = null;
+      let adminsSeen: number | null = null;
+      let selected: string[];
+      if (listen === undefined) {
+        const metadata = await opts.whatsapp.getGroupMetadata(id);
+        const admins = metadata.participants.filter((p) => p.admin !== null);
+        const botIds = new Set(opts.whatsapp.botIds());
+        subject = metadata.subject;
+        adminsSeen = admins.length;
+        selected = admins.length === 1 && botIds.has(admins[0]?.id ?? "") ? ["*"] : [];
+      } else {
+        selected = persistedIdentities(listen);
+      }
       await mutate(opts, (doc) => {
         if (doc.getIn(["groups", id], true) !== undefined) {
           throw new Error(`group is already registered: ${id}`);
         }
         doc.setIn(["groups", id], {
-          display_name: display_name === undefined ? metadata.subject : display_name,
-          admins_seen: admins.length,
+          display_name: display_name === undefined ? subject : display_name,
+          admins_seen: adminsSeen,
           listen_source: listen === undefined ? "default_admin" : "explicit",
           listen: selected,
         });

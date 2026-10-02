@@ -211,6 +211,37 @@ profiles:
     expect(invalid.isError).toBe(true);
   });
 
+  it("registers with an explicit listen list without a live WhatsApp lookup", async () => {
+    // Not a fake group: any metadata lookup would fail, and WhatsApp is down anyway.
+    const groupId = "120363999999999999@g.us";
+    handle.fake?.setState("disconnected");
+    try {
+      const registered = await client.callTool({
+        name: "register_group",
+        arguments: { group_id: groupId, listen: ["34600000002"], display_name: "Offline" },
+      });
+      expect(registered.isError).not.toBe(true);
+      const listed = await client.callTool({ name: "list_groups", arguments: {} });
+      expect(
+        (listed.structuredContent as { result: Array<Record<string, unknown>> }).result
+      ).toContainEqual({
+        id: groupId,
+        displayName: "Offline",
+        adminsSeen: null,
+        listenSource: "explicit",
+        listen: ["34600000002@s.whatsapp.net"],
+      });
+      const defaulted = await client.callTool({
+        name: "register_group",
+        arguments: { group_id: "120363999999999998@g.us" },
+      });
+      expect(defaulted.isError).toBe(true);
+    } finally {
+      handle.fake?.setState("connected");
+      await client.callTool({ name: "forget_group", arguments: { group_id: groupId } });
+    }
+  });
+
   it("serializes duplicate registration and profile creation across MCP sessions", async () => {
     const otherTransport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
       requestInit: { headers: { authorization: `Bearer ${MANAGEMENT_SECRET}` } },

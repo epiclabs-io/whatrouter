@@ -318,31 +318,31 @@ may omit it, so the check is browser hardening rather than an auth or network bo
 
 All group tools except `join_group_by_invite` and `create_group` require a registry entry:
 
-| Tool                         | Semantics                                                                                                            |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `list_groups`                | List registry entries only; never discovers or lists all groups from WhatsApp.                                       |
-| `get_group`                  | Registry entry plus live metadata.                                                                                   |
-| `register_group`             | Register a known JID; with no explicit listen list, use `["*"]` only when the bot is the sole admin, otherwise `[]`. |
-| `update_group`               | Set registry `display_name`.                                                                                         |
-| `forget_group`               | Remove registry policy without leaving or changing routes.                                                           |
-| `get_listen_list`            | Read the registry sender gate.                                                                                       |
-| `set_listen_list`            | Replace the gate and set `listen_source: explicit`; wildcard must stand alone.                                       |
-| `list_group_members`         | Read live participants/admin roles.                                                                                  |
-| `modify_group_members`       | Add, remove, promote, or demote users.                                                                               |
-| `list_group_join_requests`   | Read pending requests.                                                                                               |
-| `review_group_join_requests` | Approve or reject requests.                                                                                          |
-| `get_group_invite_code`      | Read the current invite code or null.                                                                                |
-| `revoke_group_invite_code`   | Replace the invite code.                                                                                             |
-| `join_group_by_invite`       | Join by code without registering or routing.                                                                         |
-| `create_group`               | Create with optional participants without registering or routing.                                                    |
-| `leave_group`                | Leave a registered group and optionally forget it after success.                                                     |
-| `update_group_settings`      | Set subject, description, announcement/restriction, ephemeral duration, member-add, or join-approval settings.       |
-| `list_profiles`              | List profiles with secrets omitted.                                                                                  |
-| `create_profile`             | Generate and persist a profile; return its relay credentials and environment lines.                                  |
-| `delete_profile`             | Close and remove a non-last profile; repair `default_profile` when it named the deleted profile.                     |
-| `close_profile`              | Close relay and start/reset a 20-second reconnect hold.                                                              |
-| `release_profile`            | Cancel a hold without reconnecting or waking.                                                                        |
-| `get_health`                 | Return router, WhatsApp, relay, hold, and buffer status.                                                             |
+| Tool                         | Semantics                                                                                                                                                                                                                            |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list_groups`                | List registry entries only; never discovers or lists all groups from WhatsApp.                                                                                                                                                       |
+| `get_group`                  | Registry entry plus live metadata.                                                                                                                                                                                                   |
+| `register_group`             | Register a known JID; with no explicit listen list, use `["*"]` only when the bot is the sole admin, otherwise `[]` (needs live metadata). An explicit listen list is a pure config write that works while WhatsApp is disconnected. |
+| `update_group`               | Set registry `display_name`.                                                                                                                                                                                                         |
+| `forget_group`               | Remove registry policy without leaving or changing routes.                                                                                                                                                                           |
+| `get_listen_list`            | Read the registry sender gate.                                                                                                                                                                                                       |
+| `set_listen_list`            | Replace the gate and set `listen_source: explicit`; wildcard must stand alone.                                                                                                                                                       |
+| `list_group_members`         | Read live participants/admin roles.                                                                                                                                                                                                  |
+| `modify_group_members`       | Add, remove, promote, or demote users.                                                                                                                                                                                               |
+| `list_group_join_requests`   | Read pending requests.                                                                                                                                                                                                               |
+| `review_group_join_requests` | Approve or reject requests.                                                                                                                                                                                                          |
+| `get_group_invite_code`      | Read the current invite code or null.                                                                                                                                                                                                |
+| `revoke_group_invite_code`   | Replace the invite code.                                                                                                                                                                                                             |
+| `join_group_by_invite`       | Join by code without registering or routing.                                                                                                                                                                                         |
+| `create_group`               | Create with optional participants without registering or routing.                                                                                                                                                                    |
+| `leave_group`                | Leave a registered group and optionally forget it after success.                                                                                                                                                                     |
+| `update_group_settings`      | Set subject, description, announcement/restriction, ephemeral duration, member-add, or join-approval settings.                                                                                                                       |
+| `list_profiles`              | List profiles with secrets omitted.                                                                                                                                                                                                  |
+| `create_profile`             | Generate and persist a profile; return its relay credentials and environment lines.                                                                                                                                                  |
+| `delete_profile`             | Close and remove a non-last profile; repair `default_profile` when it named the deleted profile.                                                                                                                                     |
+| `close_profile`              | Close relay and start/reset a 20-second reconnect hold.                                                                                                                                                                              |
+| `release_profile`            | Cancel a hold without reconnecting or waking.                                                                                                                                                                                        |
+| `get_health`                 | Return router, WhatsApp, relay, hold, and buffer status.                                                                                                                                                                             |
 
 There is no group-delete tool because WhatsApp exposes leaving, not deleting. There is no
 WhatsApp discovery/list-all operation; callers need a known JID, an invite code, or a newly
