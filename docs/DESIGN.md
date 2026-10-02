@@ -355,6 +355,12 @@ candidate, writes and fsyncs a mode-0600 temporary file, atomically renames it, 
 directory, and reloads the in-memory config. This preserves unrelated comments and makes dynamic
 profile create/delete and group policy changes visible without restart.
 
+While the router runs, it owns `config.yaml`: the operator must not edit the file by hand. There
+is no file watch or reload signal, so a hand edit is not applied when saved. It is applied by the
+next MCP mutation, because each mutation reparses the file from disk. An invalid edit makes every
+mutation fail until it is fixed, and an edit made while a mutation runs can be overwritten. To
+change config by hand, stop the router, edit, then start it.
+
 ## WhatsApp mapping rules (Baileys 7)
 
 - **Socket**: `makeWASocket({version (fetchLatestBaileysVersion with 15 s timeout, fallback cached/default), auth:{creds, keys: makeCacheableSignalKeyStore(state.keys, logger)}, logger: pino, browser:['WhatRouter','Chrome','120.0'], syncFullHistory:false, markOnlineOnConnect:false, getMessage: bounded store lookup else {conversation:''}, cachedGroupMetadata: LRU})`. Auth state: `useMultiFileAuthState(<data_dir>/wa-auth)`; `creds.update → saveCreds`.
@@ -375,7 +381,8 @@ profile create/delete and group policy changes visible without restart.
 
 In Docker, `/data/config.yaml` lives inside the existing writable `/data` volume alongside state.
 It must not be over-mounted as a separate read-only file because MCP mutations replace it
-atomically.
+atomically. Hand edits are made only while the router is stopped (see the config writeback rules
+above).
 
 ```yaml
 listen: 0.0.0.0:8466

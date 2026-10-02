@@ -83,7 +83,8 @@ run WhatRouter (it needs a stable, reachable address if your Hermes instances li
 
 **1. Write the config into the writable data volume.** The live Docker path is
 `/data/config.yaml`; do not mount that file separately read-only because MCP management tools
-update it.
+update it. While WhatRouter is running it owns this file: **do not edit it by hand** then. Stop
+the container, edit, and start it again (see [Editing the live config](#editing-the-live-config)).
 
 ```bash
 git clone <repo-url> whatrouter && cd whatrouter
@@ -348,9 +349,16 @@ WhatsApp account, equivalent to a linked device, and it is not encrypted.
 migrates forward on open, `wa-auth` is unaffected and buffered events survive, so instances
 reconnect and drain on their own. Re-pairing is only needed if WhatsApp logged the session out.
 
-**Rotating a profile secret.** Generate a new one (`openssl rand -hex 32`), put it in
-`/data/config.yaml`, `docker compose restart whatrouter`, then update that one instance's
-`~/.hermes/.env` (`whatrouter env <profile>` prints the new lines) and `hermes gateway restart`.
+**Editing the live config.** While running, WhatRouter owns `/data/config.yaml`; only MCP tools
+change it. A hand edit is not picked up when saved (there is no file watch or reload signal). It
+silently goes live with the next MCP mutation, which reparses the file from disk. If the edit is
+invalid, every MCP mutation fails until it is fixed, and an edit made during a mutation can be
+overwritten. To edit by hand: `docker compose stop whatrouter`, edit,
+`docker compose run --rm whatrouter check-config`, then `docker compose start whatrouter`.
+
+**Rotating a profile secret.** Generate a new one (`openssl rand -hex 32`), then
+`docker compose stop whatrouter`, put it in `/data/config.yaml`, `docker compose start whatrouter`,
+then update that one instance's `~/.hermes/.env` (`whatrouter env <profile>` prints the new lines) and `hermes gateway restart`.
 Between those two steps the instance sees close code 4401 and stops reconnecting until it is
 restarted with the new secret; other profiles are unaffected, and its messages are buffered.
 

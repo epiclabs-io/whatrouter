@@ -137,6 +137,11 @@ async function fsyncDirectory(path: string): Promise<void> {
   }
 }
 
+/**
+ * Owns the live config file while the process runs. Hand edits are unsupported then: nothing
+ * watches the file, and each `mutate` reparses it from disk, so an edit would go live with the
+ * next unrelated mutation (or make every mutation fail if invalid). Edit only while stopped.
+ */
 export class ConfigStore {
   readonly path: string;
   #current: Config | null = null;
