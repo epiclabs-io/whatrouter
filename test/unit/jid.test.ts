@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalJid,
   digitsOf,
+  formatUserIdentity,
   isBroadcastOrNewsletter,
   isGroupJid,
   isLidJid,
@@ -9,6 +10,7 @@ import {
   isPnJid,
   normalizeJid,
   phoneToJid,
+  parseUserIdentity,
   sameUser,
 } from "../../src/whatsapp/jid.js";
 
@@ -40,6 +42,17 @@ describe("digitsOf / phoneToJid", () => {
   it("builds a phone-number jid", () => {
     expect(phoneToJid("+34 600 000 000")).toBe("34600000000@s.whatsapp.net");
     expect(phoneToJid("34600000000")).toBe("34600000000@s.whatsapp.net");
+  });
+});
+
+describe("config user identities", () => {
+  it("parses bare, PN and LID forms and formats PN identities as bare digits", () => {
+    expect(parseUserIdentity("34600000000")).toBe("34600000000@s.whatsapp.net");
+    expect(parseUserIdentity("34600000000@s.whatsapp.net")).toBe("34600000000@s.whatsapp.net");
+    expect(parseUserIdentity("123456789012345@lid")).toBe("123456789012345@lid");
+    expect(parseUserIdentity("invalid")).toBeNull();
+    expect(formatUserIdentity("34600000000@s.whatsapp.net")).toBe("34600000000");
+    expect(formatUserIdentity("123456789012345@lid")).toBe("123456789012345@lid");
   });
 });
 

@@ -92,6 +92,27 @@ export function isPnJidLike(raw: string): boolean {
   return PN_JID_RE.test(normalizeJid(raw));
 }
 
+/** Parse an operator-facing user identity into its canonical runtime JID. */
+export function parseUserIdentity(raw: string): string | null {
+  const value = raw.trim();
+  if (isPnJidLike(value) || isLidJidLike(value)) {
+    return normalizeJid(value);
+  }
+  if (isPhoneLike(value)) {
+    return phoneToJid(value);
+  }
+  return null;
+}
+
+/** Format a user identity for config: phone JIDs become bare digits; LIDs stay explicit. */
+export function formatUserIdentity(raw: string): string | null {
+  const identity = parseUserIdentity(raw);
+  if (identity === null) {
+    return null;
+  }
+  return isPnJid(identity) ? digitsOf(identity) : identity;
+}
+
 /**
  * The id we key everything on: the `@s.whatsapp.net` form when either side is a phone
  * number JID, else the `@lid` form. Anything else (groups) passes through normalized.

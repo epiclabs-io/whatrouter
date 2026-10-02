@@ -62,6 +62,7 @@ describe("defaults", () => {
     expect(config.defaultProfile).toBeNull();
     expect(config.allowUnroutedOutbound).toBe(false);
     expect(config.management).toBeNull();
+    expect(config.groups).toEqual({});
     expect(config.profiles[0]).toMatchObject({
       name: "work",
       gatewayId: "gw-work",
@@ -120,6 +121,103 @@ describe("route normalization", () => {
     expect(
       config.profiles[0]?.routes.map((r) => (r.kind === "group" ? r.requireMention : null))
     ).toEqual([undefined, false, true]);
+  });
+});
+
+describe("group registry", () => {
+  const profiles = { work: { gateway_id: "gw-work", secret: SECRET_A, routes: [] } };
+
+  it("normalizes defaults, bare phones, PN JIDs and LID JIDs", () => {
+    const { config, warnings } = ok(
+      raw(profiles, {
+        groups: {
+          "120363001234567890-123@g.us": {
+            listen_source: "explicit",
+            listen: ["34600000000", "34600000001@s.whatsapp.net", "999888777@lid"],
+          },
+        },
+      })
+    );
+    expect(config.groups["120363001234567890-123@g.us"]).toEqual({
+      displayName: null,
+      adminsSeen: null,
+      listenSource: "explicit",
+      listen: ["34600000000@s.whatsapp.net", "34600000001@s.whatsapp.net", "999888777@lid"],
+    });
+    expect(find(warnings, "groups.120363001234567890-123@g.us.listen[2]").message).toContain(
+      "opaque"
+    );
+  });
+
+  it("accepts a lone wildcard and rejects wildcard/user mixtures", () => {
+    const wildcard = ok(
+      raw(profiles, {
+        groups: { "1@g.us": { listen_source: "default_admin", listen: ["*"] } },
+      })
+    );
+    expect(wildcard.config.groups["1@g.us"]?.listen).toEqual(["*"]);
+
+    const list = errors(
+      raw(profiles, {
+        groups: {
+          "1@g.us": { listen_source: "explicit", listen: ["*", "34600000000"] },
+        },
+      })
+    );
+    expect(find(list, "groups.1@g.us.listen").message).toContain("only listen entry");
+  });
+
+  it("requires normalized group keys and nonnegative admins_seen", () => {
+    const keyErrors = errors(
+      raw(profiles, {
+        groups: { "1@G.US": { listen_source: "explicit" } },
+      })
+    );
+    expect(find(keyErrors, "groups.1@G.US").message).toContain("normalized");
+
+    const countErrors = errors(
+      raw(profiles, {
+        groups: { "1@g.us": { listen_source: "explicit", admins_seen: -1 } },
+      })
+    );
+    expect(find(countErrors, "groups.1@g.us.admins_seen").message).toContain(">=0");
+  });
+
+  it("warns for LIDs in DM and allowed-sender routes", () => {
+    const { warnings } = ok(
+      raw({
+        work: {
+          gateway_id: "gw-work",
+          secret: SECRET_A,
+          routes: [
+            { dm: "123456789012345@lid" },
+            { group: "1@g.us", allowed_senders: ["999888777@lid"] },
+          ],
+        },
+      })
+    );
+    expect(warnings.map((warning) => warning.path)).toEqual([
+      "profiles.work.routes[0].dm",
+      "profiles.work.routes[1].group",
+      "profiles.work.routes[1].allowed_senders[0]",
+    ]);
+  });
+
+  it("warns for routes missing registry entries and registered groups missing routes", () => {
+    const { warnings } = ok(
+      raw(
+        {
+          work: {
+            gateway_id: "gw-work",
+            secret: SECRET_A,
+            routes: [{ group: "1@g.us" }],
+          },
+        },
+        { groups: { "2@g.us": { listen_source: "explicit", listen: [] } } }
+      )
+    );
+    expect(find(warnings, "profiles.work.routes[0].group").message).toContain("not present");
+    expect(find(warnings, "groups.2@g.us").message).toContain("no profile route");
   });
 });
 

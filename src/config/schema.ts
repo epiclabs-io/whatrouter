@@ -38,6 +38,13 @@ const profileSchema = z.strictObject({
   routes: z.array(routeSchema).default([]),
 });
 
+const groupSchema = z.strictObject({
+  display_name: z.string().nullable().default(null),
+  admins_seen: z.number().int().nonnegative().nullable().default(null),
+  listen_source: z.enum(["default_admin", "explicit"]),
+  listen: z.array(z.string()).default([]),
+});
+
 export const rawConfigSchema = z.strictObject({
   listen: z.string().default(DEFAULT_LISTEN),
   public_url: z.string().nullable().default(null),
@@ -67,6 +74,7 @@ export const rawConfigSchema = z.strictObject({
   allow_unrouted_outbound: z.boolean().default(false),
   /** Omitted (or null) = the `/management` route does not exist. */
   management: managementSchema.nullable().default(null),
+  groups: z.record(z.string(), groupSchema).default({}),
   profiles: z
     .record(z.string(), profileSchema)
     .refine((v) => Object.keys(v).length > 0, { message: "at least one profile is required" }),
@@ -103,6 +111,14 @@ export interface ProfileConfig {
   routes: Route[];
 }
 
+export interface GroupConfig {
+  displayName: string | null;
+  adminsSeen: number | null;
+  listenSource: "default_admin" | "explicit";
+  /** Exactly `["*"]`, or canonical user JIDs (possibly empty). */
+  listen: string[];
+}
+
 export interface Config {
   listen: { host: string; port: number };
   /** Trailing slash stripped; null = fall back to `http://localhost:<port>`. */
@@ -121,6 +137,7 @@ export interface Config {
   allowUnroutedOutbound: boolean;
   /** Static bearer secret for `GET /management`; null = route disabled. */
   management: { secret: string } | null;
+  groups: Record<`${string}@g.us`, GroupConfig>;
   profiles: ProfileConfig[];
 }
 
