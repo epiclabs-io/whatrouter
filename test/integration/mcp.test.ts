@@ -163,6 +163,51 @@ profiles:
     expect(listed.tools.every((tool) => tool.outputSchema !== undefined)).toBe(true);
   });
 
+  it("evicts the least recently used session instead of refusing new ones", async () => {
+    const headers = {
+      authorization: `Bearer ${MANAGEMENT_SECRET}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    };
+    const initialize = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "abandoned", version: "1" },
+      },
+    });
+    const listTools = (sessionId: string): Promise<Response> =>
+      fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: { ...headers, "mcp-session-id": sessionId },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+      });
+
+    // More abandoned sessions than the cap; the real client stays the most recently used.
+    const abandoned: string[] = [];
+    for (let i = 0; i < 33; i += 1) {
+      const response = await fetch(`${base}/mcp`, { method: "POST", headers, body: initialize });
+      expect(response.status).toBe(200);
+      await response.text();
+      abandoned.push(response.headers.get("mcp-session-id") ?? "");
+      await client.listTools();
+    }
+
+    expect((await listTools(abandoned[0] ?? "")).status).toBe(404);
+    expect((await listTools(abandoned[32] ?? "")).status).toBe(200);
+    await expect(client.listTools()).resolves.toBeDefined();
+
+    for (const sessionId of abandoned) {
+      await fetch(`${base}/mcp`, {
+        method: "DELETE",
+        headers: { ...headers, "mcp-session-id": sessionId },
+      });
+    }
+  });
+
   it("performs fake group operations and preserves YAML comments during mutation", async () => {
     const created = await client.callTool({
       name: "create_group",

@@ -307,7 +307,8 @@ session`. WS ping every 30 s, 60 s pong timeout, independent of relay sessions.
 The singleton WebSocket remains the push/event and close/release interface for an orchestrator;
 Streamable HTTP MCP is the agent-facing tool interface. Neither is a REST API. MCP is stateful,
 accepts the standard `GET`, `POST`, and `DELETE` transport methods, caps request bodies at 1 MiB,
-allows 32 sessions, and expires sessions after 15 minutes idle.
+allows 32 sessions (a new session evicts the least recently used idle one when full; 503 only
+if all 32 have requests in flight), and expires sessions after 15 minutes idle.
 
 Both interfaces carry a long-lived bearer with authority over all profiles; MCP additionally
 changes live config and WhatsApp groups. Plain `http://`/`ws://` exposes credentials and payloads

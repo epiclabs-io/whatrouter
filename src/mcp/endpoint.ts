@@ -16,6 +16,8 @@ interface SessionEntry {
   server: ReturnType<typeof createMcpServer>;
   transport: StreamableHTTPServerTransport;
   lastUsed: number;
+  /** Requests currently being handled; busy sessions are never evicted. */
+  inFlight: number;
 }
 
 interface InitializingEntry extends SessionEntry {
@@ -64,7 +66,7 @@ export function createMcpEndpoint(opts: McpToolOptions & { log: Logger }): McpEn
   const expire = setInterval(() => {
     const cutoff = Date.now() - IDLE_MS;
     for (const [id, entry] of sessions) {
-      if (entry.lastUsed < cutoff) {
+      if (entry.lastUsed < cutoff && entry.inFlight === 0) {
         sessions.delete(id);
         void entry.transport.close().catch(() => undefined);
         void entry.server.close().catch(() => undefined);
@@ -72,6 +74,31 @@ export function createMcpEndpoint(opts: McpToolOptions & { log: Logger }): McpEn
     }
   }, 60_000);
   expire.unref?.();
+
+  /**
+   * Frees a slot by closing the least recently used idle session. Clients that restart
+   * without a DELETE leave sessions behind; refusing new ones would lock management out.
+   */
+  function evictLeastRecentlyUsed(): boolean {
+    let victim: [string, SessionEntry] | undefined;
+    for (const candidate of sessions) {
+      if (
+        candidate[1].inFlight === 0 &&
+        (victim === undefined || candidate[1].lastUsed < victim[1].lastUsed)
+      ) {
+        victim = candidate;
+      }
+    }
+    if (victim === undefined) {
+      return false;
+    }
+    const [id, entry] = victim;
+    sessions.delete(id);
+    void entry.transport.close().catch(() => undefined);
+    void entry.server.close().catch(() => undefined);
+    opts.log.info({ sessionId: id }, "evicted the least recently used MCP session");
+    return true;
+  }
 
   async function remove(id: string, entry: SessionEntry): Promise<void> {
     if (sessions.get(id) !== entry) {
@@ -133,7 +160,7 @@ export function createMcpEndpoint(opts: McpToolOptions & { log: Logger }): McpEn
           req.resume();
           return;
         }
-        if (sessions.size + initializing.size >= MAX_SESSIONS) {
+        if (sessions.size + initializing.size >= MAX_SESSIONS && !evictLeastRecentlyUsed()) {
           json(res, 503, { error: "too many MCP sessions" });
           req.resume();
           return;
@@ -174,7 +201,7 @@ export function createMcpEndpoint(opts: McpToolOptions & { log: Logger }): McpEn
           maxRequestBodySize: BODY_LIMIT,
           onsessioninitialized: (id): void => {
             if (!closed && initializing.has(initializingEntry)) {
-              sessions.set(id, { server, transport, lastUsed: Date.now() });
+              sessions.set(id, { server, transport, lastUsed: Date.now(), inFlight: 0 });
             }
           },
           onsessionclosed: (id) => {
@@ -184,7 +211,7 @@ export function createMcpEndpoint(opts: McpToolOptions & { log: Logger }): McpEn
             }
           },
         });
-        entry = { server, transport, lastUsed: Date.now() };
+        entry = { server, transport, lastUsed: Date.now(), inFlight: 0 };
         initializingEntry = { ...entry, done, finish };
         initializing.add(initializingEntry);
         transport.onerror = (error: Error) =>
@@ -207,7 +234,13 @@ export function createMcpEndpoint(opts: McpToolOptions & { log: Logger }): McpEn
         return;
       }
       entry.lastUsed = Date.now();
-      await entry.transport.handleRequest(req, res);
+      entry.inFlight += 1;
+      try {
+        await entry.transport.handleRequest(req, res);
+      } finally {
+        entry.inFlight -= 1;
+        entry.lastUsed = Date.now();
+      }
     },
 
     async close() {

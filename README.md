@@ -462,7 +462,8 @@ the agent.
 
 `/mcp` uses standard stateful Streamable HTTP MCP (`GET`, `POST`, and `DELETE`) with
 `Authorization: Bearer <management secret>`. Sessions expire after 15 minutes idle and the server
-allows at most 32 at once. These methods are MCP transport operations, not REST resources.
+allows at most 32 at once; when full, a new session evicts the least recently used idle one
+(clients that restart without `DELETE` cannot lock management out). These methods are MCP transport operations, not REST resources.
 
 | Tool                         | Semantics                                                                                                                                                                           |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
