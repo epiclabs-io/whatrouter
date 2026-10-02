@@ -446,7 +446,7 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
   );
   tool(
     "update_group_settings",
-    "Update one or more settings on a registered group.",
+    "Update one or more settings on a registered group. Settings are applied in order and stop at the first failure; the result lists what was applied, what failed, and what was not attempted.",
     {
       group_id: groupIdSchema,
       subject: z.string().min(1).optional(),
@@ -460,36 +460,74 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
     externalWrite,
     async (args) => {
       const id = registered(opts, args.group_id);
-      const operations: Promise<void>[] = [];
+      // Thunks, run one at a time: a parallel batch could partially apply and report one
+      // opaque error. Sequentially, the result names exactly what changed.
+      const operations: Array<[string, () => Promise<void>]> = [];
       if (args.subject !== undefined) {
-        operations.push(opts.whatsapp.updateGroupSubject(id, args.subject));
+        const subject = args.subject;
+        operations.push(["subject", () => opts.whatsapp.updateGroupSubject(id, subject)]);
       }
       if (args.description !== undefined) {
-        operations.push(opts.whatsapp.updateGroupDescription(id, args.description));
+        const description = args.description;
+        operations.push([
+          "description",
+          () => opts.whatsapp.updateGroupDescription(id, description),
+        ]);
       }
       if (args.announcement !== undefined) {
-        operations.push(opts.whatsapp.setGroupAnnouncement(id, args.announcement));
+        const announcement = args.announcement;
+        operations.push([
+          "announcement",
+          () => opts.whatsapp.setGroupAnnouncement(id, announcement),
+        ]);
       }
       if (args.restrict !== undefined) {
-        operations.push(opts.whatsapp.setGroupRestrict(id, args.restrict));
+        const restrict = args.restrict;
+        operations.push(["restrict", () => opts.whatsapp.setGroupRestrict(id, restrict)]);
       }
       if (args.ephemeral_duration !== undefined) {
-        operations.push(opts.whatsapp.setGroupEphemeralDuration(id, args.ephemeral_duration));
+        const seconds = args.ephemeral_duration;
+        operations.push([
+          "ephemeral_duration",
+          () => opts.whatsapp.setGroupEphemeralDuration(id, seconds),
+        ]);
       }
       if (args.member_add_mode !== undefined) {
-        operations.push(opts.whatsapp.setGroupMemberAddMode(id, args.member_add_mode));
+        const mode = args.member_add_mode;
+        operations.push(["member_add_mode", () => opts.whatsapp.setGroupMemberAddMode(id, mode)]);
       }
       if (args.join_approval_mode !== undefined) {
-        operations.push(opts.whatsapp.setGroupJoinApprovalMode(id, args.join_approval_mode));
+        const enabled = args.join_approval_mode;
+        operations.push([
+          "join_approval_mode",
+          () => opts.whatsapp.setGroupJoinApprovalMode(id, enabled),
+        ]);
       }
       if (operations.length === 0) {
         throw new Error("at least one group setting is required");
       }
-      await Promise.all(operations);
-      return reply(
-        { id, updated: Object.keys(args).filter((key) => key !== "group_id") },
-        `Updated settings for ${id}`
-      );
+      const updated: string[] = [];
+      for (const [index, [setting, run]] of operations.entries()) {
+        try {
+          await run();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const notAttempted = operations.slice(index + 1).map(([name]) => name);
+          const text =
+            `Updating ${setting} on ${id} failed: ${message}. ` +
+            `Applied: ${updated.length === 0 ? "none" : updated.join(", ")}. ` +
+            `Not attempted: ${notAttempted.length === 0 ? "none" : notAttempted.join(", ")}.`;
+          return {
+            isError: true,
+            structuredContent: {
+              result: { id, updated, failed: { setting, error: message }, notAttempted },
+            },
+            content: [{ type: "text" as const, text }],
+          };
+        }
+        updated.push(setting);
+      }
+      return reply({ id, updated }, `Updated settings for ${id}`);
     }
   );
 

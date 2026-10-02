@@ -287,6 +287,58 @@ profiles:
     }
   });
 
+  it("applies group settings in order and reports a partial failure precisely", async () => {
+    const fake = handle.fake;
+    if (fake === null) {
+      throw new Error("fake WhatsApp port expected");
+    }
+    const created = await client.callTool({
+      name: "create_group",
+      arguments: { subject: "Settings group", participant_ids: [] },
+    });
+    const groupId = (created.structuredContent as { result: { id: string } }).result.id;
+    await client.callTool({ name: "register_group", arguments: { group_id: groupId } });
+
+    const original = fake.setGroupRestrict;
+    fake.setGroupRestrict = async () => {
+      throw new Error("not an admin");
+    };
+    try {
+      const failed = await client.callTool({
+        name: "update_group_settings",
+        arguments: {
+          group_id: groupId,
+          subject: "Renamed",
+          restrict: true,
+          member_add_mode: "all",
+        },
+      });
+      expect(failed.isError).toBe(true);
+      expect((failed.structuredContent as { result: unknown }).result).toEqual({
+        id: groupId,
+        updated: ["subject"],
+        failed: { setting: "restrict", error: "not an admin" },
+        notAttempted: ["member_add_mode"],
+      });
+      const metadata = await fake.getGroupMetadata(groupId);
+      expect(metadata.subject).toBe("Renamed");
+      expect(metadata.memberAddMode).toBe("admins");
+    } finally {
+      fake.setGroupRestrict = original;
+    }
+
+    const succeeded = await client.callTool({
+      name: "update_group_settings",
+      arguments: { group_id: groupId, restrict: true, member_add_mode: "all" },
+    });
+    expect(succeeded.isError).not.toBe(true);
+    expect((succeeded.structuredContent as { result: unknown }).result).toEqual({
+      id: groupId,
+      updated: ["restrict", "member_add_mode"],
+    });
+    await client.callTool({ name: "forget_group", arguments: { group_id: groupId } });
+  });
+
   it("serializes duplicate registration and profile creation across MCP sessions", async () => {
     const otherTransport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
       requestInit: { headers: { authorization: `Bearer ${MANAGEMENT_SECRET}` } },
