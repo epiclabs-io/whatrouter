@@ -4,6 +4,7 @@
  */
 import { parseArgs } from "node:util";
 import { loadConfigFile } from "./config/load.js";
+import { ConfigStore } from "./config/store.js";
 import { ConfigError, relayUrl, type Config, type Issue } from "./config/schema.js";
 import { runServe } from "./serve.js";
 import { createLogger } from "./util/log.js";
@@ -120,15 +121,23 @@ export async function run(argv: string[], io: CliIo = processIo): Promise<number
 
   switch (command) {
     case "serve": {
-      const loaded = await load(io, configPath(values.config));
-      if (loaded === null) {
-        return EXIT_CONFIG;
+      const path = configPath(values.config);
+      try {
+        const configStore = await ConfigStore.load(path);
+        reportIssues(io, "warning", [...configStore.warnings]);
+        return await runServe({
+          config: configStore.get(),
+          configStore,
+          log: createLogger({ level: configStore.get().logLevel, name: "whatrouter" }),
+          io,
+        });
+      } catch (err) {
+        if (err instanceof ConfigError) {
+          reportIssues(io, "error", err.errors);
+          return EXIT_CONFIG;
+        }
+        throw err;
       }
-      return await runServe({
-        config: loaded.config,
-        log: createLogger({ level: loaded.config.logLevel, name: "whatrouter" }),
-        io,
-      });
     }
 
     case "pair": {

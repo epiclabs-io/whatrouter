@@ -92,6 +92,17 @@ describe("buffered-only flip", () => {
 });
 
 describe("purge", () => {
+  it("purges one profile's events and flip without touching another", () => {
+    const store = memStore();
+    store.buffer.append("work", testEvent("work"));
+    store.buffer.append("home", testEvent("home"));
+    store.buffer.setBufferedOnly("work", true);
+    expect(store.buffer.purgeProfile("work")).toBe(1);
+    expect(store.buffer.count("work")).toBe(0);
+    expect(store.buffer.isBufferedOnly("work")).toBe(false);
+    expect(store.buffer.count("home")).toBe(1);
+  });
+
   it("removes rows older than the max age and leaves fresh ones", () => {
     const store = memStore();
     const now = 1_754_700_000;

@@ -37,6 +37,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     defaultProfile: null,
     allowUnroutedOutbound: false,
     management: null,
+    groups: {},
     profiles: [testProfile("work")],
     ...overrides,
   };

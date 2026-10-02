@@ -39,6 +39,7 @@ import { Session } from "./session.js";
 import { mediaUrl } from "./media-url.js";
 import { secretMatches } from "../management/auth.js";
 import { ManagementEndpoint, MANAGEMENT_MAX_MESSAGE_BYTES } from "../management/endpoint.js";
+import { createMcpEndpoint, type McpEndpoint } from "../mcp/endpoint.js";
 import type {
   CloseProfileResult,
   FailureResult,
@@ -47,11 +48,19 @@ import type {
 } from "../management/frames.js";
 import { MediaTooLargeError, type Store } from "../store/db.js";
 import type { Config, ProfileConfig } from "../config/schema.js";
+import type { ConfigStore } from "../config/store.js";
 import type { Logger } from "../util/log.js";
+import type { WhatsAppPort } from "../whatsapp/port.js";
 import type { OutboundAction, OutboundResult, RelayEvent } from "./frames.js";
 
 export interface RelayServerOptions {
   config: Config;
+  /** Current snapshot for request-time auth, routing metadata, and limits. */
+  getConfig?: (() => Config) | undefined;
+  /** Enables persistent MCP mutation tools when provided. */
+  configStore?: ConfigStore | undefined;
+  /** Enables the MCP group-management tools when provided. */
+  whatsapp?: WhatsAppPort | undefined;
   store: Store;
   log: Logger;
   /** Runs one outbound action against WhatsApp on behalf of `profile`. */
@@ -88,6 +97,11 @@ export interface RelayServer {
   address(): { host: string; port: number } | null;
   /** Hourly by itself; exposed so tests (and ops) can force a sweep. */
   runMaintenance(nowSeconds?: number): { bufferPurged: number; mediaPurged: number };
+  closeProfile(profileName: string): CloseProfileResult | FailureResult;
+  releaseProfile(profileName: string): ReleaseProfileResult | FailureResult;
+  /** Permanently removes live and durable runtime state for a deleted profile. */
+  removeProfile(profileName: string): void;
+  health(): Record<string, unknown>;
 }
 
 const PING_INTERVAL_MS = 30_000;
@@ -226,19 +240,11 @@ async function readBody(
 
 export function createRelayServer(opts: RelayServerOptions): RelayServer {
   const { config, store, log } = opts;
+  const currentConfig = (): Config => opts.getConfig?.() ?? config;
   const nowSeconds = opts.now ?? ((): number => Math.floor(Date.now() / 1000));
   const nowMs = opts.nowMs ?? Date.now;
   const scheduleHoldExpiry = opts.scheduleHoldExpiry ?? defaultSchedule;
   const doFetch = opts.fetchImpl ?? globalThis.fetch;
-  const descriptor = buildDescriptor(config);
-
-  const byName = new Map<string, ProfileConfig>();
-  const byGatewayId = new Map<string, ProfileConfig>();
-  for (const profile of config.profiles) {
-    byName.set(profile.name, profile);
-    byGatewayId.set(profile.gatewayId, profile);
-  }
-
   const sessions = new Map<string, SessionEntry>();
   const lastWake = new Map<string, number>();
   const holds = new Map<string, Hold>();
@@ -248,6 +254,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
   let boundPort: number | null = null;
   let boundHost: string | null = null;
   let closed = false;
+  let mcpEndpoint: McpEndpoint | null = null;
 
   // --------------------------------------------------------------------- auth
 
@@ -267,7 +274,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       return fail(ip, "malformed");
     }
 
-    const profile = byGatewayId.get(claimed);
+    const profile = currentConfig().profiles.find((candidate) => candidate.gatewayId === claimed);
     if (profile === undefined) {
       return fail(ip, "unknown_id");
     }
@@ -369,7 +376,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     } catch {
       pathname = "/";
     }
-    const managementSecret = config.management?.secret;
+    const managementSecret = currentConfig().management?.secret;
     if (pathname === "/management" && managementSecret !== undefined) {
       const authorized = authenticateManagement(req, managementSecret);
       managementWss.handleUpgrade(req, socket, head, (ws) => {
@@ -430,7 +437,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     const session = new Session({
       profile: profile.name,
       store,
-      descriptor,
+      descriptor: buildDescriptor(currentConfig()),
       send: (frame) => {
         if (ws.readyState === ws.OPEN) {
           ws.send(encodeFrame(frame));
@@ -513,6 +520,10 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       handleHealth(res);
       return;
     }
+    if (path === "/mcp" && mcpEndpoint !== null) {
+      await mcpEndpoint.handle(req, res);
+      return;
+    }
     if (method === "POST" && path === "/relay/policy") {
       await handlePolicy(req, res);
       return;
@@ -534,26 +545,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
   }
 
   function handleHealth(res: ServerResponse): void {
-    const profiles: Record<
-      string,
-      { connected: boolean; buffered: number; blockedUntilMs?: number }
-    > = {};
-    for (const profile of config.profiles) {
-      const hold = holds.get(profile.name);
-      profiles[profile.name] = {
-        connected: sessions.has(profile.name),
-        buffered: store.buffer.count(profile.name),
-        // Additive: present only while a management hold is in force.
-        ...(hold !== undefined && isHeld(profile.name) ? { blockedUntilMs: hold.untilMs } : {}),
-      };
-    }
-    let extra: Record<string, unknown> = {};
-    try {
-      extra = opts.health();
-    } catch (err: unknown) {
-      log.error({ err: String(err) }, "health callback failed");
-    }
-    sendJson(res, 200, { status: "ok", ...extra, profiles });
+    sendJson(res, 200, healthSnapshot());
   }
 
   async function handlePolicy(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -583,7 +575,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     if (profile === null) {
       return;
     }
-    const body = await readBody(req, config.media.maxBytes);
+    const body = await readBody(req, currentConfig().media.maxBytes);
     if (!body.ok) {
       sendJson(res, 413, { error: "payload too large" });
       return;
@@ -698,7 +690,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     }
     const now = nowSeconds();
     const last = lastWake.get(profile.name);
-    if (last !== undefined && now - last < config.buffer.wakeCooldownSeconds) {
+    if (last !== undefined && now - last < currentConfig().buffer.wakeCooldownSeconds) {
       return;
     }
     lastWake.set(profile.name, now);
@@ -726,7 +718,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
 
   function pendingSnapshot(): PendingProfile[] {
     const pending: PendingProfile[] = [];
-    for (const profile of config.profiles) {
+    for (const profile of currentConfig().profiles) {
       const bufferedCount = store.buffer.count(profile.name);
       if (bufferedCount > 0) {
         pending.push({ profile: profile.name, gatewayId: profile.gatewayId, bufferedCount });
@@ -778,7 +770,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
    * is already off, so the orchestrator may suspend the agent on the result.
    */
   function closeProfile(profileName: string): CloseProfileResult | FailureResult {
-    const profile = byName.get(profileName);
+    const profile = currentConfig().profiles.find((candidate) => candidate.name === profileName);
     if (profile === undefined) {
       return { success: false, error: "unknown profile" };
     }
@@ -813,7 +805,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
 
   /** Cancels only the reconnect hold; the orchestrator owns resume/wake policy. */
   function releaseProfile(profileName: string): ReleaseProfileResult | FailureResult {
-    const profile = byName.get(profileName);
+    const profile = currentConfig().profiles.find((candidate) => candidate.name === profileName);
     if (profile === undefined) {
       return { success: false, error: "unknown profile" };
     }
@@ -828,6 +820,25 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     return { success: true, profile: profile.name, wasHeld };
   }
 
+  function removeProfile(profileName: string): void {
+    const hold = holds.get(profileName);
+    hold?.cancel();
+    holds.delete(profileName);
+    lastWake.delete(profileName);
+
+    const entry = sessions.get(profileName);
+    if (entry !== undefined) {
+      sessions.delete(profileName);
+      clearInterval(entry.ping);
+      entry.session.close();
+      closeDetached(entry.ws, 1001, "profile deleted");
+    }
+    store.buffer.purgeProfile(profileName);
+    store.media.purgeProfile(profileName);
+    store.policy.delete(profileName);
+    log.info({ profile: profileName, wasConnected: entry !== undefined }, "profile state removed");
+  }
+
   // -------------------------------------------------------------- maintenance
 
   function runMaintenance(now: number = nowSeconds()): {
@@ -835,8 +846,9 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     mediaPurged: number;
   } {
     throttle.prune(Date.now());
-    const bufferPurged = store.buffer.purgeOlderThan(config.buffer.maxAgeSeconds, now);
-    const mediaPurged = store.media.purgeOlderThan(config.media.retentionSeconds, now);
+    const latest = currentConfig();
+    const bufferPurged = store.buffer.purgeOlderThan(latest.buffer.maxAgeSeconds, now);
+    const mediaPurged = store.media.purgeOlderThan(latest.media.retentionSeconds, now);
     if (bufferPurged > 0 || mediaPurged > 0) {
       log.info({ bufferPurged, mediaPurged }, "maintenance sweep removed expired rows");
     }
@@ -851,6 +863,19 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     }
   }, MAINTENANCE_INTERVAL_MS);
   maintenanceTimer.unref?.();
+
+  if (opts.whatsapp !== undefined) {
+    mcpEndpoint = createMcpEndpoint({
+      getConfig: currentConfig,
+      configStore: opts.configStore,
+      whatsapp: opts.whatsapp,
+      closeProfile,
+      releaseProfile,
+      removeProfile,
+      health: healthSnapshot,
+      log: log.child({ route: "/mcp" }),
+    });
+  }
 
   // ------------------------------------------------------------------- public
 
@@ -890,6 +915,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       }
       holds.clear();
       management.close();
+      await mcpEndpoint?.close();
       for (const ws of detached) {
         ws.terminate();
       }
@@ -927,7 +953,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     },
 
     deliver(profileName, event) {
-      const profile = byName.get(profileName);
+      const profile = currentConfig().profiles.find((candidate) => candidate.name === profileName);
       if (profile === undefined) {
         log.warn({ profile: profileName }, "delivery for an unknown profile");
         return "unknown_profile";
@@ -971,7 +997,33 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     },
 
     runMaintenance,
+    closeProfile,
+    releaseProfile,
+    removeProfile,
+    health: healthSnapshot,
   };
+
+  function healthSnapshot(): Record<string, unknown> {
+    const profiles: Record<
+      string,
+      { connected: boolean; buffered: number; blockedUntilMs?: number }
+    > = {};
+    for (const profile of currentConfig().profiles) {
+      const hold = holds.get(profile.name);
+      profiles[profile.name] = {
+        connected: sessions.has(profile.name),
+        buffered: store.buffer.count(profile.name),
+        ...(hold !== undefined && isHeld(profile.name) ? { blockedUntilMs: hold.untilMs } : {}),
+      };
+    }
+    let extra: Record<string, unknown> = {};
+    try {
+      extra = opts.health();
+    } catch (err: unknown) {
+      log.error({ err: String(err) }, "health callback failed");
+    }
+    return { status: "ok", ...extra, profiles };
+  }
 }
 
 /** Convenience re-export so WP4 can build event media URLs from one import. */
