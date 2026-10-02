@@ -12,7 +12,7 @@
  *            `{success:false, error}` (the gateway waits on its requestId).
  */
 import { WHATSAPP_SUPPORTED_OPS } from "../relay/descriptor.js";
-import { shouldDeliver } from "./relevance.js";
+import { shouldDeliver, shouldListenToGroup } from "./relevance.js";
 import { toRelayEvent, type EventMedia } from "./event.js";
 import {
   buildRouteTable,
@@ -35,6 +35,8 @@ export interface RelayDeliverer {
 
 export interface RouterOptions {
   config: Config;
+  /** Returns the current config. A new object identity triggers a route-table rebuild. */
+  getConfig?: (() => Config) | undefined;
   store: Store;
   log: Logger;
   whatsapp: WhatsAppPort;
@@ -92,7 +94,17 @@ type MediaSource =
 export function createRouter(opts: RouterOptions): Router {
   const { config, store, log, whatsapp, relay, mediaUrlFor } = opts;
   const doFetch = opts.fetchImpl ?? globalThis.fetch;
-  const table = buildRouteTable(config);
+  let activeConfig = config;
+  let activeTable = buildRouteTable(activeConfig);
+
+  function current(): { config: Config; table: RouteTable } {
+    const nextConfig = opts.getConfig?.() ?? config;
+    if (nextConfig !== activeConfig) {
+      activeConfig = nextConfig;
+      activeTable = buildRouteTable(nextConfig);
+    }
+    return { config: activeConfig, table: activeTable };
+  }
 
   // ------------------------------------------------------------------ inbound
 
@@ -123,7 +135,38 @@ export function createRouter(opts: RouterOptions): Router {
 
   async function onInbound(m: InboundMessage): Promise<void> {
     try {
-      const match = resolveProfile(table, config, m);
+      const { config: currentConfig, table } = current();
+      if (m.chatType === "group") {
+        const groupId = canonicalChatId(m.chatId);
+        const group = currentConfig.groups[groupId as keyof typeof currentConfig.groups];
+        if (group === undefined) {
+          log.warn(
+            {
+              chatId: groupId,
+              chatIdRaw: m.chatIdRaw,
+              senderId: m.senderId,
+              reason: "rogue_unregistered_group",
+            },
+            "rogue unregistered group dropped"
+          );
+          return;
+        }
+        const listenDecision = shouldListenToGroup(m, group.listen);
+        if (!listenDecision.deliver) {
+          log.debug(
+            {
+              chatId: groupId,
+              senderId: m.senderId,
+              senderIdAlt: m.senderIdAlt,
+              reason: listenDecision.reason,
+            },
+            "inbound group message dropped by the listen gate"
+          );
+          return;
+        }
+      }
+
+      const match = resolveProfile(table, currentConfig, m);
       if (match === null) {
         log.info(
           {
@@ -204,12 +247,13 @@ export function createRouter(opts: RouterOptions): Router {
       return { ok: false, error: `could not fetch media: HTTP ${res.status}` };
     }
     const declared = Number(res.headers.get("content-length"));
-    if (Number.isFinite(declared) && declared > config.media.maxBytes) {
-      return { ok: false, error: `media is larger than ${config.media.maxBytes} bytes` };
+    const maxBytes = current().config.media.maxBytes;
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      return { ok: false, error: `media is larger than ${maxBytes} bytes` };
     }
     const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.byteLength > config.media.maxBytes) {
-      return { ok: false, error: `media is larger than ${config.media.maxBytes} bytes` };
+    if (bytes.byteLength > maxBytes) {
+      return { ok: false, error: `media is larger than ${maxBytes} bytes` };
     }
     const contentType = (res.headers.get("content-type") ?? "").split(";")[0]?.trim() ?? "";
     return {
@@ -271,7 +315,15 @@ export function createRouter(opts: RouterOptions): Router {
     if (chat === "") {
       return { success: false, error: "missing chat_id" };
     }
-    if (!isRoutedTo(table, config, profile.name, chat)) {
+    const { config: currentConfig, table } = current();
+    if (chat.endsWith("@g.us") && currentConfig.groups[chat as `${string}@g.us`] === undefined) {
+      log.warn(
+        { profile: profile.name, chatId: chat, op },
+        "refusing an outbound action for an unregistered group"
+      );
+      return { success: false, error: "group is not registered" };
+    }
+    if (!isRoutedTo(table, currentConfig, profile.name, chat)) {
       log.warn(
         { profile: profile.name, chatId: chat, op },
         "refusing an outbound action for a chat this profile does not own"
@@ -338,5 +390,11 @@ export function createRouter(opts: RouterOptions): Router {
     }
   }
 
-  return { onInbound, execute, table };
+  return {
+    onInbound,
+    execute,
+    get table() {
+      return current().table;
+    },
+  };
 }
