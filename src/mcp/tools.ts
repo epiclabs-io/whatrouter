@@ -202,7 +202,7 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
   });
   tool(
     "get_group",
-    "Get a registered group and live metadata.",
+    "Get a registered group and live metadata (use get_group_invite_code for the invite code).",
     { group_id: groupIdSchema },
     readOnly,
     async ({ group_id }) => {

@@ -716,14 +716,9 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
     },
 
     async getGroupMetadata(groupId): Promise<GroupMetadata> {
-      const jid = normalizeJid(groupId);
-      const metadata = normalizeGroupMetadata(await fetchGroupMetadata(jid));
-      try {
-        metadata.inviteCode = (await requireSocket().groupInviteCode(jid)) ?? metadata.inviteCode;
-      } catch (err) {
-        log.debug({ err, jid }, "groupInviteCode failed while fetching metadata");
-      }
-      return metadata;
+      // Deliberately no invite-code query here: it is an extra WhatsApp request per call
+      // (and always fails when we are not admin). `getGroupInviteCode` is the explicit path.
+      return normalizeGroupMetadata(await fetchGroupMetadata(normalizeJid(groupId)));
     },
 
     async updateGroupParticipants(groupId, participantIds, action) {

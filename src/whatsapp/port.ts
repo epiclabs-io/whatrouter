@@ -81,6 +81,7 @@ export interface GroupMetadata {
   owner: string | null;
   participants: GroupParticipant[];
   size: number;
+  /** Only when WhatsApp includes it in metadata; use `getGroupInviteCode` to fetch it. */
   inviteCode: string | null;
   announcement: boolean;
   restrict: boolean;
@@ -122,6 +123,7 @@ export interface WhatsAppPort {
   sendMedia(chat: string, media: OutboundMedia): Promise<{ messageId: string }>;
   chatInfo(chat: string): Promise<{ name: string; type: ChatType }>;
   createGroup(subject: string, participantIds: string[]): Promise<GroupMetadata>;
+  /** Cached metadata only; `inviteCode` is whatever WhatsApp included (often null). */
   getGroupMetadata(groupId: string): Promise<GroupMetadata>;
   updateGroupParticipants(
     groupId: string,

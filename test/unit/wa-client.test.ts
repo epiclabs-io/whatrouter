@@ -338,7 +338,7 @@ describe("createBaileysClient: outbound", () => {
 });
 
 describe("createBaileysClient: group management", () => {
-  it("normalizes metadata and fetches the invite code separately", async () => {
+  it("normalizes metadata without an extra invite-code query", async () => {
     const h = await connected();
     const socket = h.sockets[0]?.socket;
     if (socket === undefined) {
@@ -377,7 +377,7 @@ describe("createBaileysClient: group management", () => {
         { id: "34622222222@s.whatsapp.net", admin: null },
       ],
       size: 2,
-      inviteCode: "CURRENT",
+      inviteCode: null,
       announcement: true,
       restrict: true,
       ephemeralDuration: 604800,
@@ -385,7 +385,7 @@ describe("createBaileysClient: group management", () => {
       joinApprovalMode: true,
     });
     expect(socket.groupMetadata).toHaveBeenCalledWith("120363001234567890@g.us");
-    expect(socket.groupInviteCode).toHaveBeenCalledWith("120363001234567890@g.us");
+    expect(socket.groupInviteCode).not.toHaveBeenCalled();
   });
 
   it("invalidates cached metadata on group and participant updates", async () => {
@@ -412,21 +412,24 @@ describe("createBaileysClient: group management", () => {
     expect(socket.groupMetadata).toHaveBeenCalledTimes(3);
   });
 
-  it("returns metadata when invite-code retrieval fails", async () => {
+  it("keeps an invite code WhatsApp included in metadata", async () => {
     const h = await connected();
     const socket = h.sockets[0]?.socket;
     if (socket === undefined) {
       throw new Error("missing fake socket");
     }
-    socket.groupInviteCode = vi.fn(async () => {
-      throw new Error("not an admin");
-    });
-    await expect(h.client.getGroupMetadata("1@g.us")).resolves.toMatchObject({
-      id: "1@g.us",
-      subject: "Test Group",
+    socket.groupMetadata = vi.fn(async (jid: string) => ({
+      id: jid,
+      subject: "Inline",
+      owner: undefined,
       participants: [],
-      inviteCode: null,
+      inviteCode: "INLINE",
+    }));
+    socket.groupInviteCode = vi.fn(async () => "QUERIED");
+    await expect(h.client.getGroupMetadata("1@g.us")).resolves.toMatchObject({
+      inviteCode: "INLINE",
     });
+    expect(socket.groupInviteCode).not.toHaveBeenCalled();
   });
 
   it("normalizes participant operations and maps group setting values", async () => {
