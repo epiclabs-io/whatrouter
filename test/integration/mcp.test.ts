@@ -36,6 +36,7 @@ describe("Streamable HTTP MCP management API", () => {
   let base: string;
   let client: Client;
   let transport: StreamableHTTPClientTransport;
+  let configStore: ConfigStore;
 
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), "whatrouter-mcp-"));
@@ -55,7 +56,7 @@ profiles:
     routes: []
 `
     );
-    const configStore = await ConfigStore.load(configPath);
+    configStore = await ConfigStore.load(configPath);
     const started = await startServe({
       config: configStore.get(),
       configStore,
@@ -337,6 +338,58 @@ profiles:
       updated: ["restrict", "member_add_mode"],
     });
     await client.callTool({ name: "forget_group", arguments: { group_id: groupId } });
+  });
+
+  it("says whether leave_group left when forgetting or leaving fails", async () => {
+    const created = await client.callTool({
+      name: "create_group",
+      arguments: { subject: "Leave group", participant_ids: [] },
+    });
+    const groupId = (created.structuredContent as { result: { id: string } }).result.id;
+    await client.callTool({ name: "register_group", arguments: { group_id: groupId } });
+
+    const mutate = configStore.mutate.bind(configStore);
+    configStore.mutate = async () => {
+      throw new Error("disk full");
+    };
+    let leftButRemembered;
+    try {
+      leftButRemembered = await client.callTool({
+        name: "leave_group",
+        arguments: { group_id: groupId, forget: true },
+      });
+    } finally {
+      configStore.mutate = mutate;
+    }
+    expect(leftButRemembered.isError).toBe(true);
+    expect((leftButRemembered.structuredContent as { result: unknown }).result).toEqual({
+      id: groupId,
+      left: true,
+      forgotten: false,
+      error: "disk full",
+    });
+    expect(leftButRemembered.content).toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining("call forget_group") })
+    );
+
+    // The retry an agent would make: the leave fails, and the hint points at forget_group.
+    const retried = await client.callTool({
+      name: "leave_group",
+      arguments: { group_id: groupId, forget: true },
+    });
+    expect(retried.isError).toBe(true);
+    expect(
+      (retried.structuredContent as { result: { left: boolean; forgotten: boolean } }).result
+    ).toMatchObject({ left: false, forgotten: false });
+    expect(retried.content).toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining("call forget_group") })
+    );
+
+    const forgotten = await client.callTool({
+      name: "forget_group",
+      arguments: { group_id: groupId },
+    });
+    expect(forgotten.isError).not.toBe(true);
   });
 
   it("serializes duplicate registration and profile creation across MCP sessions", async () => {

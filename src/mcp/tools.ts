@@ -429,17 +429,46 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
   );
   tool(
     "leave_group",
-    "Leave a registered group and optionally forget it after success.",
+    "Leave a registered group and optionally forget it after success. On error, the result says whether the leave happened; if it did, use forget_group instead of retrying.",
     { group_id: groupIdSchema, forget: z.boolean().optional() },
     destructiveExternalWrite,
     async ({ group_id, forget }) => {
       const id = registered(opts, group_id);
-      await opts.whatsapp.leaveGroup(id);
+      // The two steps cannot be atomic. Each failure says what state we are in, so a
+      // caller never retries a leave that already happened (it would fail, not forget).
+      try {
+        await opts.whatsapp.leaveGroup(id);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const hint =
+          forget === true
+            ? " If the router already left this group, call forget_group to remove the registry entry."
+            : "";
+        return {
+          isError: true,
+          structuredContent: { result: { id, left: false, forgotten: false, error: message } },
+          content: [{ type: "text" as const, text: `Leaving ${id} failed: ${message}.${hint}` }],
+        };
+      }
       if (forget === true) {
-        await mutate(opts, (doc) => {
-          requireDocumentEntry(doc, ["groups", id], `group is not registered: ${id}`);
-          doc.deleteIn(["groups", id]);
-        });
+        try {
+          await mutate(opts, (doc) => {
+            requireDocumentEntry(doc, ["groups", id], `group is not registered: ${id}`);
+            doc.deleteIn(["groups", id]);
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            isError: true,
+            structuredContent: { result: { id, left: true, forgotten: false, error: message } },
+            content: [
+              {
+                type: "text" as const,
+                text: `Left ${id}, but forgetting it failed: ${message}. Do not retry leave_group; call forget_group.`,
+              },
+            ],
+          };
+        }
       }
       return reply({ id, left: true, forgotten: forget === true }, `Left ${id}`);
     }
