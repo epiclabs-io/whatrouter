@@ -10,19 +10,13 @@ import {
   MIN_SECRET_LENGTH,
   rawConfigSchema,
   type Config,
+  type GroupConfig,
   type Issue,
   type ProfileConfig,
   type Route,
   type ValidateResult,
 } from "./schema.js";
-import {
-  isGroupJidLike,
-  isLidJidLike,
-  isPhoneLike,
-  isPnJidLike,
-  normalizeJid,
-  phoneToJid,
-} from "../whatsapp/jid.js";
+import { isGroupJidLike, isLidJidLike, parseUserIdentity, normalizeJid } from "../whatsapp/jid.js";
 
 export interface ValidateContext {
   env?: Record<string, string | undefined>;
@@ -84,19 +78,13 @@ function formatZodPath(path: readonly PropertyKey[]): string {
   return out === "" ? "(root)" : out;
 }
 
-/** `+34 600 000 000`, `34600000000@s.whatsapp.net` or `<digits>@lid` -> canonical JID. */
-function normalizeUserId(raw: string): string | null {
-  const value = raw.trim();
-  if (isPnJidLike(value) || isLidJidLike(value)) {
-    return normalizeJid(value);
-  }
-  if (isPhoneLike(value)) {
-    return phoneToJid(value);
-  }
-  return null;
-}
-
 const USER_ID_HINT = "expected +<digits>, <digits>@s.whatsapp.net or <digits>@lid";
+
+function warnIfLid(raw: string, path: string, warnings: Issue[]): void {
+  if (isLidJidLike(raw)) {
+    warnings.push({ path, message: "LID user identities are opaque and may not be portable" });
+  }
+}
 
 function duplicateChat(id: string, first: string, second: string): string {
   return first === second
@@ -221,6 +209,56 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
   const secrets = new Map<string, string>();
   const chats = new Map<string, { profile: string; path: string }>();
   const profiles: ProfileConfig[] = [];
+  const groups: Record<`${string}@g.us`, GroupConfig> = {};
+  const routedGroups = new Set<string>();
+
+  for (const [rawId, rawGroup] of Object.entries(data.groups)) {
+    const base = `groups.${rawId}`;
+    if (!isGroupJidLike(rawId) || normalizeJid(rawId) !== rawId) {
+      errors.push({
+        path: base,
+        message: `invalid group registry key "${rawId}" (expected normalized <digits>(-<digits>)?@g.us)`,
+      });
+      continue;
+    }
+
+    const listen: string[] = [];
+    const wildcardIndexes = rawGroup.listen
+      .map((identity, index) => (identity.trim() === "*" ? index : -1))
+      .filter((index) => index !== -1);
+    if (
+      wildcardIndexes.length > 0 &&
+      (rawGroup.listen.length !== 1 || wildcardIndexes.length !== 1)
+    ) {
+      errors.push({
+        path: `${base}.listen`,
+        message: 'wildcard "*" must be the only listen entry',
+      });
+    }
+    rawGroup.listen.forEach((identity, index) => {
+      const path = `${base}.listen[${index}]`;
+      if (identity.trim() === "*") {
+        listen.push("*");
+        return;
+      }
+      const parsedIdentity = parseUserIdentity(identity);
+      if (parsedIdentity === null) {
+        errors.push({
+          path,
+          message: `invalid phone number or JID "${identity}" (${USER_ID_HINT})`,
+        });
+        return;
+      }
+      warnIfLid(identity, path, warnings);
+      listen.push(parsedIdentity);
+    });
+    groups[rawId as `${string}@g.us`] = {
+      displayName: rawGroup.display_name,
+      adminsSeen: rawGroup.admins_seen,
+      listenSource: rawGroup.listen_source,
+      listen,
+    };
+  }
 
   for (const [name, rawProfile] of Object.entries(data.profiles)) {
     const base = `profiles.${name}`;
@@ -271,7 +309,7 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
       const routePath = `${base}.routes[${index}]`;
 
       if (rawRoute.dm !== undefined) {
-        const id = normalizeUserId(rawRoute.dm);
+        const id = parseUserIdentity(rawRoute.dm);
         if (id === null) {
           errors.push({
             path: `${routePath}.dm`,
@@ -288,6 +326,7 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
           return;
         }
         chats.set(id, { profile: name, path: `${routePath}.dm` });
+        warnIfLid(rawRoute.dm, `${routePath}.dm`, warnings);
         routes.push({ kind: "dm", id });
         return;
       }
@@ -301,6 +340,13 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
         return;
       }
       const id = normalizeJid(rawGroup) as `${string}@g.us`;
+      routedGroups.add(id);
+      if (!Object.hasOwn(data.groups, id)) {
+        warnings.push({
+          path: `${routePath}.group`,
+          message: `group route "${id}" is not present in the group registry`,
+        });
+      }
       const previous = chats.get(id);
       if (previous !== undefined) {
         errors.push({
@@ -315,7 +361,7 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
       if (rawRoute.allowed_senders !== undefined) {
         allowedSenders = [];
         rawRoute.allowed_senders.forEach((sender, senderIndex) => {
-          const senderId = normalizeUserId(sender);
+          const senderId = parseUserIdentity(sender);
           if (senderId === null) {
             errors.push({
               path: `${routePath}.allowed_senders[${senderIndex}]`,
@@ -323,6 +369,7 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
             });
             return;
           }
+          warnIfLid(sender, `${routePath}.allowed_senders[${senderIndex}]`, warnings);
           allowedSenders?.push(senderId);
         });
       }
@@ -350,6 +397,15 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
       wakeUrl: rawProfile.wake_url,
       routes,
     });
+  }
+
+  for (const id of Object.keys(groups)) {
+    if (!routedGroups.has(id)) {
+      warnings.push({
+        path: `groups.${id}`,
+        message: `registered group "${id}" has no profile route`,
+      });
+    }
   }
 
   // The management secret is a separate credential: a profile secret must never
@@ -394,6 +450,7 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
     defaultProfile: data.default_profile,
     allowUnroutedOutbound: data.allow_unrouted_outbound,
     management,
+    groups,
     profiles,
   };
   return { ok: true, config, warnings };

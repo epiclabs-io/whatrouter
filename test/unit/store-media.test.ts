@@ -91,6 +91,16 @@ describe("media put/get", () => {
 });
 
 describe("media purge", () => {
+  it("deletes all metadata and files for one profile", () => {
+    const { store, dir } = fixture();
+    const work = store.media.put("work", Buffer.from("work"), "text/plain");
+    const home = store.media.put("home", Buffer.from("home"), "text/plain");
+    expect(store.media.purgeProfile("work")).toBe(1);
+    expect(store.media.getMeta(work.id)).toBeNull();
+    expect(existsSync(join(dir, "media", work.id))).toBe(false);
+    expect(store.media.getMeta(home.id)).not.toBeNull();
+  });
+
   it("deletes expired rows and their files, keeping fresh ones", () => {
     const { store, dir } = fixture();
     const now = 1_754_700_000;

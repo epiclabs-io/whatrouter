@@ -1,5 +1,6 @@
 # WhatRouter example configuration.
-# Copy to config.yaml and edit. Validate with: whatrouter check-config config.yaml
+# In Docker, copy this to the writable volume as /data/config.yaml and edit it there.
+# Validate with: whatrouter check-config /data/config.yaml
 # Path resolution: --config <path>, else $WHATROUTER_CONFIG, else ./config.yaml.
 
 listen: 0.0.0.0:8466
@@ -34,13 +35,35 @@ default_profile: null
 # Profiles may only act on chats routed to them unless this is true.
 allow_unrouted_outbound: false
 
-# Optional orchestrator API on GET /management (WebSocket, static bearer).
-# Omit the block to disable the route entirely. The secret must be >= 32 chars
-# and differ from every profile secret.
+# Optional management toolset: WebSocket /management and Streamable HTTP MCP
+# /mcp share this static bearer. Omit the block to disable both routes. The
+# secret must be >= 32 chars and differ from every profile secret.
 # management:
 #   secret: ${WHATROUTER_MANAGEMENT_SECRET}
 #   # alternatively:
 #   # secret_file: /run/secrets/whatrouter-management
+
+# Registered groups are the account-wide inbound allowlist. Messages from any
+# group absent here are dropped, even if that group has a profile route.
+# listen: ["*"] accepts every sender and "*" must be the only entry. An empty
+# list accepts nobody. User identities may be quoted bare phone numbers, full
+# phone JIDs, or explicit <digits>@lid JIDs.
+groups:
+  "120363001234567890@g.us":
+    display_name: Project Room
+    admins_seen: 2 # admin count observed when the group was registered
+    listen_source: explicit # explicit, or default_admin when MCP chose the default
+    listen:
+      - "34600000000" # quoted bare number: the readable, recommended form
+      # LIDs are also accepted where users are named (routes, allowed_senders,
+      # listen) but warn: they are opaque and may not match later traffic.
+      # - "987654321098765@lid"
+
+  "120363009876543210@g.us":
+    display_name: Bot-Owned Room
+    admins_seen: 1
+    listen_source: default_admin
+    listen: ["*"] # safe registration default only when the bot was the sole admin
 
 profiles:
   work:
@@ -57,7 +80,8 @@ profiles:
       - dm: "+34600000000"
       - group: "120363001234567890@g.us"
         require_mention: true
-        allowed_senders: ["+34600000000"]
+        # Extra narrowing after the registry listen list; it cannot widen it.
+        allowed_senders: ["34600000000"]
 
   home:
     gateway_id: gw-home

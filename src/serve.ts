@@ -13,6 +13,7 @@
  * `whatrouter pair`, which is the only command allowed to touch the link flow.
  */
 import { createRequire } from "node:module";
+import { ConfigStore } from "./config/store.js";
 import { createRouter, type RelayDeliverer, type Router } from "./router/router.js";
 import { canonicalChatId } from "./router/routes.js";
 import { mediaUrl } from "./relay/media-url.js";
@@ -47,7 +48,11 @@ export interface ServeIo {
 }
 
 export interface ServeOptions {
-  config: Config;
+  config?: Config | undefined;
+  /** Writable live config used by production and MCP mutation tools. */
+  configStore?: ConfigStore | undefined;
+  /** Convenience alternative to a preloaded ConfigStore. */
+  configPath?: string | undefined;
   log: Logger;
   io: ServeIo;
   /** Defaults to `WHATROUTER_FAKE_WHATSAPP=1`. */
@@ -85,7 +90,15 @@ function packageVersion(): string {
  * from `runServe` so tests can bind port 0 and still find out where we landed.
  */
 export async function startServe(opts: ServeOptions): Promise<StartServeResult> {
-  const { config, log, io } = opts;
+  const configStore =
+    opts.configStore ??
+    (opts.configPath === undefined ? undefined : await ConfigStore.load(opts.configPath));
+  const config = configStore?.get() ?? opts.config;
+  if (config === undefined) {
+    throw new Error("startServe requires config, configStore, or configPath");
+  }
+  const { log, io } = opts;
+  const getConfig = (): Config => configStore?.get() ?? config;
   const fake = opts.fake ?? process.env["WHATROUTER_FAKE_WHATSAPP"] === "1";
   if (fake) {
     log.warn(
@@ -118,6 +131,7 @@ export async function startServe(opts: ServeOptions): Promise<StartServeResult> 
 
   const router = createRouter({
     config,
+    getConfig,
     store,
     log: log.child({ component: "router" }),
     whatsapp,
@@ -127,6 +141,9 @@ export async function startServe(opts: ServeOptions): Promise<StartServeResult> 
 
   const server = createRelayServer({
     config,
+    getConfig,
+    configStore,
+    whatsapp,
     store,
     log: log.child({ component: "relay" }),
     execute: router.execute,

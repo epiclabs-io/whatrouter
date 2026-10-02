@@ -67,6 +67,45 @@ export interface OutboundMedia {
 
 export type WhatsAppState = "unpaired" | "connecting" | "connected" | "disconnected";
 
+export type GroupParticipantAdmin = "admin" | "superadmin" | null;
+
+export interface GroupParticipant {
+  id: string;
+  admin: GroupParticipantAdmin;
+}
+
+export interface GroupMetadata {
+  id: string;
+  subject: string;
+  description: string | null;
+  owner: string | null;
+  participants: GroupParticipant[];
+  size: number;
+  /** Only when WhatsApp includes it in metadata; use `getGroupInviteCode` to fetch it. */
+  inviteCode: string | null;
+  announcement: boolean;
+  restrict: boolean;
+  ephemeralDuration: number;
+  memberAddMode: "admins" | "all";
+  joinApprovalMode: boolean;
+}
+
+export type GroupParticipantAction = "add" | "remove" | "promote" | "demote";
+
+export interface GroupParticipantUpdate {
+  participantId: string;
+  status: string;
+}
+
+export type GroupJoinRequestMethod = "invite_link" | "linked_group_join" | "non_admin_add";
+
+export interface GroupJoinRequest {
+  participantId: string;
+  method: GroupJoinRequestMethod | null;
+}
+
+export type GroupJoinRequestAction = "approve" | "reject";
+
 export type InboundHandler = (m: InboundMessage) => Promise<void>;
 
 export interface WhatsAppPort {
@@ -83,4 +122,29 @@ export interface WhatsAppPort {
   react(chat: string, messageId: string, emoji: string): Promise<void>;
   sendMedia(chat: string, media: OutboundMedia): Promise<{ messageId: string }>;
   chatInfo(chat: string): Promise<{ name: string; type: ChatType }>;
+  createGroup(subject: string, participantIds: string[]): Promise<GroupMetadata>;
+  /** Cached metadata only; `inviteCode` is whatever WhatsApp included (often null). */
+  getGroupMetadata(groupId: string): Promise<GroupMetadata>;
+  updateGroupParticipants(
+    groupId: string,
+    participantIds: string[],
+    action: GroupParticipantAction
+  ): Promise<GroupParticipantUpdate[]>;
+  listPendingGroupJoinRequests(groupId: string): Promise<GroupJoinRequest[]>;
+  reviewPendingGroupJoinRequests(
+    groupId: string,
+    participantIds: string[],
+    action: GroupJoinRequestAction
+  ): Promise<GroupParticipantUpdate[]>;
+  getGroupInviteCode(groupId: string): Promise<string | null>;
+  revokeGroupInviteCode(groupId: string): Promise<string | null>;
+  acceptGroupInviteCode(code: string): Promise<string | null>;
+  leaveGroup(groupId: string): Promise<void>;
+  updateGroupSubject(groupId: string, subject: string): Promise<void>;
+  updateGroupDescription(groupId: string, description: string | null): Promise<void>;
+  setGroupAnnouncement(groupId: string, enabled: boolean): Promise<void>;
+  setGroupRestrict(groupId: string, enabled: boolean): Promise<void>;
+  setGroupEphemeralDuration(groupId: string, seconds: number): Promise<void>;
+  setGroupMemberAddMode(groupId: string, mode: "admins" | "all"): Promise<void>;
+  setGroupJoinApprovalMode(groupId: string, enabled: boolean): Promise<void>;
 }

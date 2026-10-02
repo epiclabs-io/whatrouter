@@ -20,7 +20,7 @@ import {
   type AnyMessageContent,
   type AuthenticationState,
   type ConnectionState,
-  type GroupMetadata,
+  type GroupMetadata as BaileysGroupMetadata,
   type MiscMessageGenerationOptions,
   type UserFacingSocketConfig,
   type WAMessage,
@@ -32,7 +32,7 @@ import type { Config } from "../config/schema.js";
 import type { Logger } from "../util/log.js";
 import { WHATSAPP_MAX_MESSAGE_CHARS, chunkText } from "./chunk.js";
 import { markdownToWhatsApp } from "./format.js";
-import { digitsOf, isGroupJid, normalizeJid } from "./jid.js";
+import { canonicalJid, digitsOf, isGroupJid, normalizeJid } from "./jid.js";
 import { createMessageStore, type MessageStore } from "./message-store.js";
 import { normalizeInbound } from "./normalize.js";
 import {
@@ -45,6 +45,10 @@ import {
 } from "./outbound.js";
 import type {
   ChatType,
+  GroupJoinRequest,
+  GroupJoinRequestMethod,
+  GroupMetadata,
+  GroupParticipantUpdate,
   InboundHandler,
   OutboundMedia,
   WhatsAppPort,
@@ -56,6 +60,11 @@ export interface SocketEventsLike {
   on(event: "connection.update", listener: (update: Partial<ConnectionState>) => void): unknown;
   on(event: "creds.update", listener: (creds?: unknown) => void): unknown;
   on(event: "messages.upsert", listener: (upsert: MessagesUpsert) => void): unknown;
+  on(
+    event: "groups.update",
+    listener: (updates: Array<{ id?: string | undefined }>) => void
+  ): unknown;
+  on(event: "group-participants.update", listener: (update: { id: string }) => void): unknown;
 }
 
 export interface MessagesUpsert {
@@ -76,7 +85,32 @@ export interface SocketLike {
   ): Promise<WAMessage | undefined>;
   sendPresenceUpdate(type: WAPresence, jid?: string): Promise<void>;
   readMessages(keys: WAMessageKey[]): Promise<void>;
-  groupMetadata(jid: string): Promise<GroupMetadata>;
+  groupMetadata(jid: string): Promise<BaileysGroupMetadata>;
+  groupCreate(subject: string, participants: string[]): Promise<BaileysGroupMetadata>;
+  groupLeave(jid: string): Promise<void>;
+  groupUpdateSubject(jid: string, subject: string): Promise<void>;
+  groupRequestParticipantsList(jid: string): Promise<Record<string, string>[]>;
+  groupRequestParticipantsUpdate(
+    jid: string,
+    participants: string[],
+    action: "approve" | "reject"
+  ): Promise<{ status: string; jid: string | undefined }[]>;
+  groupParticipantsUpdate(
+    jid: string,
+    participants: string[],
+    action: "add" | "remove" | "promote" | "demote"
+  ): Promise<{ status: string; jid: string | undefined; content: unknown }[]>;
+  groupUpdateDescription(jid: string, description?: string): Promise<void>;
+  groupInviteCode(jid: string): Promise<string | undefined>;
+  groupRevokeInvite(jid: string): Promise<string | undefined>;
+  groupAcceptInvite(code: string): Promise<string | undefined>;
+  groupToggleEphemeral(jid: string, ephemeralExpiration: number): Promise<void>;
+  groupSettingUpdate(
+    jid: string,
+    setting: "announcement" | "not_announcement" | "locked" | "unlocked"
+  ): Promise<void>;
+  groupMemberAddMode(jid: string, mode: "admin_add" | "all_member_add"): Promise<void>;
+  groupJoinApprovalMode(jid: string, mode: "on" | "off"): Promise<void>;
   updateMediaMessage(msg: WAMessage): Promise<WAMessage>;
   requestPairingCode(phoneNumber: string, customPairingCode?: string): Promise<string>;
   end(error?: Error | undefined): Promise<void> | void;
@@ -166,7 +200,7 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
 
   const store: MessageStore = createMessageStore();
   const queue = createSendQueue({ timeoutMs: config.whatsapp.sendTimeoutMs });
-  const groupCache = new Map<string, { metadata: GroupMetadata; expires: number }>();
+  const groupCache = new Map<string, { metadata: BaileysGroupMetadata; expires: number }>();
   const rawByCanonical = new Map<string, string>();
   const nameByChat = new Map<string, string>();
   const stateListeners: ((state: WhatsAppState) => void)[] = [];
@@ -205,7 +239,7 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
 
   // ---------------------------------------------------------------- group data
 
-  function cachedGroup(jid: string): GroupMetadata | undefined {
+  function cachedGroup(jid: string): BaileysGroupMetadata | undefined {
     const hit = groupCache.get(jid);
     if (hit === undefined) {
       return undefined;
@@ -217,23 +251,24 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
     return hit.metadata;
   }
 
-  async function groupMetadata(jid: string): Promise<GroupMetadata | undefined> {
+  async function fetchGroupMetadata(jid: string): Promise<BaileysGroupMetadata> {
     const hit = cachedGroup(jid);
     if (hit !== undefined) {
       return hit;
     }
-    if (sock === null) {
-      return undefined;
-    }
+    const metadata = await requireSocket().groupMetadata(jid);
+    remember(
+      groupCache,
+      jid,
+      { metadata, expires: Date.now() + GROUP_CACHE_TTL_MS },
+      GROUP_CACHE_MAX
+    );
+    return metadata;
+  }
+
+  async function groupMetadata(jid: string): Promise<BaileysGroupMetadata | undefined> {
     try {
-      const metadata = await sock.groupMetadata(jid);
-      remember(
-        groupCache,
-        jid,
-        { metadata, expires: Date.now() + GROUP_CACHE_TTL_MS },
-        GROUP_CACHE_MAX
-      );
-      return metadata;
+      return await fetchGroupMetadata(jid);
     } catch (err) {
       log.debug({ err, jid }, "groupMetadata failed");
       return undefined;
@@ -243,6 +278,47 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
   async function groupSubject(jid: string): Promise<string | null> {
     const metadata = await groupMetadata(jid);
     return metadata?.subject ?? null;
+  }
+
+  function normalizeGroupMetadata(metadata: BaileysGroupMetadata): GroupMetadata {
+    const participants = metadata.participants.map((participant) => ({
+      id: canonicalJid(participant.id, participant.phoneNumber),
+      admin:
+        participant.admin === "admin" || participant.admin === "superadmin"
+          ? participant.admin
+          : null,
+    }));
+    const owner = canonicalJid(metadata.owner ?? "", metadata.ownerPn);
+    return {
+      id: normalizeJid(metadata.id),
+      subject: metadata.subject,
+      description: metadata.desc ?? null,
+      owner: owner === "" ? null : owner,
+      participants,
+      size: metadata.size ?? participants.length,
+      inviteCode: metadata.inviteCode ?? null,
+      announcement: metadata.announce ?? false,
+      restrict: metadata.restrict ?? false,
+      ephemeralDuration: metadata.ephemeralDuration ?? 0,
+      memberAddMode: metadata.memberAddMode === true ? "all" : "admins",
+      joinApprovalMode: metadata.joinApprovalMode ?? false,
+    };
+  }
+
+  function participantResults(
+    results: { status: string; jid: string | undefined }[],
+    requested: string[]
+  ): GroupParticipantUpdate[] {
+    return results.map((result, index) => ({
+      participantId: normalizeJid(result.jid ?? requested[index] ?? ""),
+      status: result.status,
+    }));
+  }
+
+  function joinRequestMethod(value: string | undefined): GroupJoinRequestMethod | null {
+    return value === "invite_link" || value === "linked_group_join" || value === "non_admin_add"
+      ? value
+      : null;
   }
 
   // ------------------------------------------------------------------- inbound
@@ -449,6 +525,16 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
         log.error({ err }, "messages.upsert handler failed")
       );
     });
+    next.ev.on("groups.update", (updates) => {
+      for (const update of updates) {
+        if (update.id !== undefined) {
+          groupCache.delete(normalizeJid(update.id));
+        }
+      }
+    });
+    next.ev.on("group-participants.update", (update) => {
+      groupCache.delete(normalizeJid(update.id));
+    });
   }
 
   // ------------------------------------------------------------------ outbound
@@ -613,6 +699,126 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
       const quoted = media.replyTo === undefined ? undefined : store.get(media.replyTo);
       const options = quoted === undefined ? payload.options : { ...payload.options, quoted };
       return { messageId: await send(jid, { content: payload.content, options }) };
+    },
+
+    async createGroup(subject, participantIds): Promise<GroupMetadata> {
+      const current = requireSocket();
+      const participants = participantIds.map(normalizeJid);
+      const metadata = await current.groupCreate(subject, participants);
+      const jid = normalizeJid(metadata.id);
+      remember(
+        groupCache,
+        jid,
+        { metadata, expires: Date.now() + GROUP_CACHE_TTL_MS },
+        GROUP_CACHE_MAX
+      );
+      return normalizeGroupMetadata(metadata);
+    },
+
+    async getGroupMetadata(groupId): Promise<GroupMetadata> {
+      // Deliberately no invite-code query here: it is an extra WhatsApp request per call
+      // (and always fails when we are not admin). `getGroupInviteCode` is the explicit path.
+      return normalizeGroupMetadata(await fetchGroupMetadata(normalizeJid(groupId)));
+    },
+
+    async updateGroupParticipants(groupId, participantIds, action) {
+      const jid = normalizeJid(groupId);
+      const participants = participantIds.map(normalizeJid);
+      const results = await requireSocket().groupParticipantsUpdate(jid, participants, action);
+      groupCache.delete(jid);
+      return participantResults(results, participants);
+    },
+
+    async listPendingGroupJoinRequests(groupId): Promise<GroupJoinRequest[]> {
+      const jid = normalizeJid(groupId);
+      const requests = await requireSocket().groupRequestParticipantsList(jid);
+      return requests.map((request) => ({
+        participantId: normalizeJid(request.jid),
+        method: joinRequestMethod(request.request_method),
+      }));
+    },
+
+    async reviewPendingGroupJoinRequests(groupId, participantIds, action) {
+      const jid = normalizeJid(groupId);
+      const participants = participantIds.map(normalizeJid);
+      const results = await requireSocket().groupRequestParticipantsUpdate(
+        jid,
+        participants,
+        action
+      );
+      groupCache.delete(jid);
+      return participantResults(results, participants);
+    },
+
+    async getGroupInviteCode(groupId): Promise<string | null> {
+      return (await requireSocket().groupInviteCode(normalizeJid(groupId))) ?? null;
+    },
+
+    async revokeGroupInviteCode(groupId): Promise<string | null> {
+      const jid = normalizeJid(groupId);
+      const code = await requireSocket().groupRevokeInvite(jid);
+      groupCache.delete(jid);
+      return code ?? null;
+    },
+
+    async acceptGroupInviteCode(code): Promise<string | null> {
+      const jid = await requireSocket().groupAcceptInvite(code);
+      return jid === undefined ? null : normalizeJid(jid);
+    },
+
+    async leaveGroup(groupId): Promise<void> {
+      const jid = normalizeJid(groupId);
+      await requireSocket().groupLeave(jid);
+      groupCache.delete(jid);
+    },
+
+    async updateGroupSubject(groupId, subject): Promise<void> {
+      const jid = normalizeJid(groupId);
+      await requireSocket().groupUpdateSubject(jid, subject);
+      groupCache.delete(jid);
+    },
+
+    async updateGroupDescription(groupId, description): Promise<void> {
+      const jid = normalizeJid(groupId);
+      if (description === null) {
+        await requireSocket().groupUpdateDescription(jid);
+      } else {
+        await requireSocket().groupUpdateDescription(jid, description);
+      }
+      groupCache.delete(jid);
+    },
+
+    async setGroupAnnouncement(groupId, enabled): Promise<void> {
+      const jid = normalizeJid(groupId);
+      await requireSocket().groupSettingUpdate(jid, enabled ? "announcement" : "not_announcement");
+      groupCache.delete(jid);
+    },
+
+    async setGroupRestrict(groupId, enabled): Promise<void> {
+      const jid = normalizeJid(groupId);
+      await requireSocket().groupSettingUpdate(jid, enabled ? "locked" : "unlocked");
+      groupCache.delete(jid);
+    },
+
+    async setGroupEphemeralDuration(groupId, seconds): Promise<void> {
+      const jid = normalizeJid(groupId);
+      await requireSocket().groupToggleEphemeral(jid, seconds);
+      groupCache.delete(jid);
+    },
+
+    async setGroupMemberAddMode(groupId, mode): Promise<void> {
+      const jid = normalizeJid(groupId);
+      await requireSocket().groupMemberAddMode(
+        jid,
+        mode === "all" ? "all_member_add" : "admin_add"
+      );
+      groupCache.delete(jid);
+    },
+
+    async setGroupJoinApprovalMode(groupId, enabled): Promise<void> {
+      const jid = normalizeJid(groupId);
+      await requireSocket().groupJoinApprovalMode(jid, enabled ? "on" : "off");
+      groupCache.delete(jid);
     },
 
     async chatInfo(chat): Promise<{ name: string; type: ChatType }> {

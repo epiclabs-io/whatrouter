@@ -29,6 +29,12 @@ function serveConfig(dataDir: string, overrides: Partial<Config> = {}): Config {
   return testConfig({
     listen: { host: "127.0.0.1", port: 0 },
     dataDir,
+    groups: Object.fromEntries(
+      [GROUP, OPEN_GROUP, VIP_GROUP].map((id) => [
+        id,
+        { displayName: null, adminsSeen: null, listenSource: "explicit", listen: ["*"] },
+      ])
+    ),
     profiles: [
       profileWith("a", [
         dmRoute(ALICE),

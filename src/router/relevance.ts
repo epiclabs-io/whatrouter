@@ -24,6 +24,19 @@ export function isCommandText(text: string): boolean {
   return text.trimStart().startsWith("/");
 }
 
+/** Apply a registered group's account-wide sender allowlist. */
+export function shouldListenToGroup(m: InboundMessage, listen: string[]): RelevanceDecision {
+  if (listen.length === 1 && listen[0] === "*") {
+    return DELIVER;
+  }
+  const listened = listen.some(
+    (id) =>
+      sameUser(id, m.senderId) ||
+      (m.senderIdAlt !== null && m.senderIdAlt !== "" && sameUser(id, m.senderIdAlt))
+  );
+  return listened ? DELIVER : { deliver: false, reason: "group_sender_not_listened" };
+}
+
 export function shouldDeliver(
   m: InboundMessage,
   route: Route | null,

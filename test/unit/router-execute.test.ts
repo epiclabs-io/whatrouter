@@ -12,7 +12,17 @@ import type { OutboundAction, RelayEvent } from "../../src/relay/frames.js";
 import type { Store } from "../../src/store/db.js";
 import type { WhatsAppPort } from "../../src/whatsapp/port.js";
 import { silentLogger } from "../helpers/relay.js";
-import { ALICE, BOB, CAROL, GROUP, inbound, routerConfig, tempStore } from "../helpers/router.js";
+import {
+  ALICE,
+  BOB,
+  CAROL,
+  GROUP,
+  dmRoute,
+  inbound,
+  profileWith,
+  routerConfig,
+  tempStore,
+} from "../helpers/router.js";
 
 const MEDIA_BASE = "https://wr.example.com";
 
@@ -31,7 +41,11 @@ let h: Harness;
 
 function build(
   config: Config = routerConfig(),
-  overrides: { whatsapp?: WhatsAppPort; fetchImpl?: typeof fetch } = {}
+  overrides: {
+    whatsapp?: WhatsAppPort;
+    fetchImpl?: typeof fetch;
+    getConfig?: () => Config;
+  } = {}
 ): Harness {
   const created = tempStore();
   dir = created.dir;
@@ -39,6 +53,7 @@ function build(
   const delivered: Array<{ profile: string; event: RelayEvent }> = [];
   const router = createRouter({
     config,
+    ...(overrides.getConfig === undefined ? {} : { getConfig: overrides.getConfig }),
     store: created.store,
     log: silentLogger(),
     whatsapp: overrides.whatsapp ?? wa,
@@ -212,6 +227,17 @@ describe("execute: tenant check", () => {
       success: true,
     });
   });
+
+  it("never allows outbound to an unregistered group, even with a route or override", async () => {
+    h.store.close();
+    rmSync(dir, { recursive: true, force: true });
+    h = build(routerConfig({ groups: {}, allowUnroutedOutbound: true }));
+    expect(await run(h.a, { op: "send", chat_id: GROUP, content: "hola" })).toEqual({
+      success: false,
+      error: "group is not registered",
+    });
+    expect(h.wa.sent).toEqual([]);
+  });
 });
 
 describe("execute: send_media", () => {
@@ -379,6 +405,114 @@ describe("onInbound", () => {
       })
     );
     expect(h.delivered).toHaveLength(1);
+  });
+
+  it("drops a routed group that is not registered", async () => {
+    h.store.close();
+    rmSync(dir, { recursive: true, force: true });
+    h = build(routerConfig({ groups: {} }));
+    await h.router.onInbound(
+      inbound({ chatId: GROUP, chatType: "group", mentionsBot: true, media: null })
+    );
+    expect(h.delivered).toEqual([]);
+  });
+
+  it("drops a registered group that has no route", async () => {
+    h.store.close();
+    rmSync(dir, { recursive: true, force: true });
+    const config = routerConfig();
+    config.profiles[0] = profileWith("a", [dmRoute(ALICE)]);
+    h = build(config);
+    await h.router.onInbound(
+      inbound({ chatId: GROUP, chatType: "group", mentionsBot: true, media: null })
+    );
+    expect(h.delivered).toEqual([]);
+  });
+
+  it("applies wildcard, empty, and explicit group listen lists before relevance", async () => {
+    const message = inbound({
+      chatId: GROUP,
+      chatType: "group",
+      senderId: ALICE,
+      mentionsBot: true,
+    });
+    await h.router.onInbound(message);
+    expect(h.delivered).toHaveLength(1);
+
+    h.config.groups[GROUP]!.listen = [];
+    await h.router.onInbound(message);
+    expect(h.delivered).toHaveLength(1);
+
+    h.config.groups[GROUP]!.listen = [BOB];
+    await h.router.onInbound(message);
+    expect(h.delivered).toHaveLength(1);
+
+    h.config.groups[GROUP]!.listen = [ALICE];
+    await h.router.onInbound(message);
+    expect(h.delivered).toHaveLength(2);
+  });
+
+  it("canonicalizes the inbound group id before checking registration", async () => {
+    await h.router.onInbound(
+      inbound({ chatId: GROUP.replace("@g.us", "@G.US"), chatType: "group", mentionsBot: true })
+    );
+    expect(h.delivered).toHaveLength(1);
+  });
+
+  it("matches explicit group listeners through PN, LID, and alternate ids", async () => {
+    const group = h.config.groups[GROUP]!;
+    group.listen = [ALICE];
+    await h.router.onInbound(
+      inbound({ chatId: GROUP, chatType: "group", senderId: ALICE, mentionsBot: true })
+    );
+    await h.router.onInbound(
+      inbound({
+        chatId: GROUP,
+        chatType: "group",
+        senderId: "777888999@lid",
+        senderIdAlt: ALICE,
+        mentionsBot: true,
+      })
+    );
+    group.listen = ["777888999@lid"];
+    await h.router.onInbound(
+      inbound({
+        chatId: GROUP,
+        chatType: "group",
+        senderId: ALICE,
+        senderIdAlt: "777888999@lid",
+        mentionsBot: true,
+      })
+    );
+    expect(h.delivered).toHaveLength(3);
+  });
+
+  it("uses a replacement config for inbound, outbound, and table exposure", async () => {
+    h.store.close();
+    rmSync(dir, { recursive: true, force: true });
+    let liveConfig = routerConfig();
+    h = build(liveConfig, { getConfig: () => liveConfig });
+    const oldTable = h.router.table;
+    oldTable.remember(CAROL, "a");
+
+    liveConfig = routerConfig({
+      profiles: [profileWith("a", [dmRoute(CAROL)]), profileWith("b", [dmRoute(BOB)])],
+    });
+
+    expect(h.router.table).not.toBe(oldTable);
+    expect(h.router.table.has(ALICE)).toBe(false);
+    expect(h.router.table.has(CAROL)).toBe(true);
+    expect(h.router.table.rememberedSize).toBe(0);
+    expect(await run(h.a, { op: "send", chat_id: ALICE, content: "old" })).toEqual({
+      success: false,
+      error: "chat not routed to this profile",
+    });
+    expect(await run(h.a, { op: "send", chat_id: CAROL, content: "new" })).toMatchObject({
+      success: true,
+    });
+    await h.router.onInbound(inbound({ chatId: ALICE, senderId: ALICE }));
+    await h.router.onInbound(inbound({ chatId: CAROL, senderId: CAROL }));
+    expect(h.delivered.map((delivery) => delivery.event.source.chat_id)).toEqual([CAROL]);
   });
 
   it("honours a gateway policy that turns addressing off", async () => {

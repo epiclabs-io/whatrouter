@@ -92,6 +92,66 @@ describe("createFakeWhatsAppPort", () => {
     expect(port.sent.filter((s) => s.kind === "chatInfo")).toHaveLength(2);
   });
 
+  it("manages group metadata, participants and settings deterministically", async () => {
+    const port = createFakeWhatsAppPort();
+    const member = "34611111111:7@s.whatsapp.net";
+    const group = await port.createGroup("Original", [member]);
+
+    expect(group.id).toBe("120363000000000001@g.us");
+    expect(group.participants).toEqual([
+      { id: FAKE_BOT_PN, admin: "superadmin" },
+      { id: "34611111111@s.whatsapp.net", admin: null },
+    ]);
+    expect(await port.updateGroupParticipants(group.id, [member], "promote")).toEqual([
+      { participantId: "34611111111@s.whatsapp.net", status: "200" },
+    ]);
+
+    await port.updateGroupSubject(group.id, "Renamed");
+    await port.updateGroupDescription(group.id, "Description");
+    await port.setGroupAnnouncement(group.id, true);
+    await port.setGroupRestrict(group.id, true);
+    await port.setGroupEphemeralDuration(group.id, 86400);
+    await port.setGroupMemberAddMode(group.id, "all");
+    await port.setGroupJoinApprovalMode(group.id, true);
+
+    expect(await port.getGroupMetadata(group.id)).toMatchObject({
+      subject: "Renamed",
+      description: "Description",
+      announcement: true,
+      restrict: true,
+      ephemeralDuration: 86400,
+      memberAddMode: "all",
+      joinApprovalMode: true,
+      size: 2,
+    });
+    expect((await port.getGroupMetadata(group.id)).participants[1]?.admin).toBe("admin");
+  });
+
+  it("reviews pending joins and rotates invite codes", async () => {
+    const port = createFakeWhatsAppPort();
+    const group = await port.createGroup("Requests", []);
+    port.setPendingGroupJoinRequests(group.id, [
+      { participantId: "34622222222:3@s.whatsapp.net", method: "invite_link" },
+    ]);
+
+    expect(await port.listPendingGroupJoinRequests(group.id)).toEqual([
+      { participantId: "34622222222@s.whatsapp.net", method: "invite_link" },
+    ]);
+    expect(
+      await port.reviewPendingGroupJoinRequests(group.id, ["34622222222@s.whatsapp.net"], "approve")
+    ).toEqual([{ participantId: "34622222222@s.whatsapp.net", status: "200" }]);
+    expect((await port.getGroupMetadata(group.id)).size).toBe(2);
+
+    const oldCode = await port.getGroupInviteCode(group.id);
+    const newCode = await port.revokeGroupInviteCode(group.id);
+    expect(newCode).not.toBe(oldCode);
+    expect(await port.acceptGroupInviteCode(oldCode ?? "")).toBeNull();
+    expect(await port.acceptGroupInviteCode(newCode ?? "")).toBe(group.id);
+
+    await port.leaveGroup(group.id);
+    await expect(port.getGroupMetadata(group.id)).rejects.toThrow(/unknown fake WhatsApp group/);
+  });
+
   it("resets its recording", async () => {
     const port = createFakeWhatsAppPort();
     await port.sendText("x@s.whatsapp.net", "hi");

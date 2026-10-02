@@ -31,6 +31,8 @@ export interface BufferStore {
   isBufferedOnly(profile: string): boolean;
   /** Clears the durable flip iff the buffer is empty; returns whether it did. */
   clearFlipIfEmpty(profile: string): boolean;
+  /** Deletes all buffered events and durable delivery state for one profile. */
+  purgeProfile(profile: string): number;
   purgeOlderThan(maxAgeSeconds: number, nowSeconds?: number): number;
   profiles(): string[];
 }
@@ -43,6 +45,8 @@ export function createBufferStore(db: DatabaseSync): BufferStore {
   const deleteRow = db.prepare("DELETE FROM buffer WHERE profile = ? AND seq = ?");
   const countRows = db.prepare("SELECT COUNT(*) AS n FROM buffer WHERE profile = ?");
   const purge = db.prepare("DELETE FROM buffer WHERE created_at < ?");
+  const purgeProfileRows = db.prepare("DELETE FROM buffer WHERE profile = ?");
+  const deleteFlip = db.prepare("DELETE FROM flips WHERE profile = ?");
   const distinctProfiles = db.prepare("SELECT DISTINCT profile FROM buffer");
 
   const upsertFlip = db.prepare(
@@ -116,6 +120,14 @@ export function createBufferStore(db: DatabaseSync): BufferStore {
         }
         upsertFlip.run(profile, 0);
         return true;
+      });
+    },
+
+    purgeProfile(profile) {
+      return transaction(() => {
+        const removed = Number(purgeProfileRows.run(profile).changes);
+        deleteFlip.run(profile);
+        return removed;
       });
     },
 

@@ -10,9 +10,9 @@ and sockets, and exchanges normalized `MessageEvent`s (inbound) and `action`s (o
 open-source connector today is `nabi-allenby/hermes-relay-connector` (Rust, Discord).
 
 WhatRouter is the WhatsApp equivalent, simplified: **one WhatsApp account (a dedicated bot
-number), owned by WhatRouter, multiplexed to N Hermes instances by a static YAML config.** Each
+number), owned by WhatRouter, multiplexed to N Hermes instances by a live YAML config.** Each
 Hermes instance is a _profile_ with a long-lived `gateway_id` + `secret`; routes bind WhatsApp DMs
-(by phone) and groups (by JID) to a profile. No enrollment/provisioning API, no admin API, no
+(by phone) and groups (by JID) to a profile. No enrollment/provisioning or REST management API, no
 multi-tenant NAS/OIDC. One extra CLI command (`pair`) does the one-off QR / pairing-code login and
 persists the Baileys auth state so later launches just work.
 
@@ -54,6 +54,7 @@ every package (diff review, tests, protocol conformance) before merge.
  │ relay/      WS server /relay (HMAC bearer), NDJSON frames,        │
  │             per-profile session actor, sqlite buffer + replay,     │
  │             wake poke, /relay/policy, /relay/media, /healthz       │
+ │ management/ WS /management + Streamable HTTP MCP /mcp              │
  │ store/      node:sqlite: buffer, flips, policies, media index      │
  └───────────────────────────────────────────────────────────────────┘
                               ▲  outbound-only dials (wss://…/relay)
@@ -209,17 +210,19 @@ Gateway treats `markdown_dialect ∉ {"", "plain"}` as "code blocks OK"; an expl
 | `POST /relay/media`                                                            | HMAC bearer; raw body; `Content-Type`, `X-Media-Filename` | Store ≤25 MB → `{id}`; owned by profile                                                       |
 | `GET /relay/media/{id}`                                                        | HMAC bearer of owning profile                             | Bytes + `Content-Type` + `Content-Disposition`                                                |
 | `GET /healthz`                                                                 | none                                                      | `{status, whatsapp:"connected                                                                 | connecting | disconnected | unpaired", profiles:{id:{connected, buffered, blockedUntilMs?}}}` |
-| `GET /management`                                                              | static management bearer (upgrade); only if configured    | Orchestrator WebSocket — see "Management API" below; unknown path when not configured         |
+| `GET /management`                                                              | static management bearer (upgrade); only if configured    | Orchestrator WebSocket — see "Management WebSocket" below; unknown path when not configured   |
+| `GET/POST/DELETE /mcp`                                                         | static management bearer; only if configured              | Stateful Streamable HTTP MCP — see "MCP management tools" below; 404 when not configured      |
 | `/relay/enroll`, `/relay/provision`                                            |                                                           | 404 by design                                                                                 |
 | `POST /debug/inbound`                                                          | only when `WHATROUTER_FAKE_WHATSAPP=1`                    | inject a fake inbound (tests/conformance)                                                     |
 | Auth failures: log at warn, per-IP throttle (10 failures/60 s → 429 for HTTP). |
 
-## Management API (`GET /management`) — separate from the relay contract
+## Management WebSocket (`GET /management`)
 
 Added 2026-10-01. Everything in the wire protocol reference above is **unchanged**: no relay frame,
-close code or auth rule was altered, and a management connection is never a relay session. The
-management contract lives in `src/management/` (`frames.ts`, `endpoint.ts`, `auth.ts`), not in
-`src/relay/frames.ts`.
+close code or auth rule was altered, and a management connection is never a relay session. This
+WebSocket and `/mcp` form one management toolset and share `management.secret`, but have separate
+transports and client roles. The WebSocket contract lives in `src/management/` (`frames.ts`,
+`endpoint.ts`, `auth.ts`), not in `src/relay/frames.ts`.
 
 - **Purpose.** Let an orchestrator see newly accepted inbound messages per profile, close an idle
   agent's relay session, suspend its container, and resume it when a message arrives. It controls
@@ -298,6 +301,66 @@ session`. WS ping every 30 s, 60 s pong timeout, independent of relay sessions.
 - **Testability.** `createRelayServer` accepts `nowMs` and `scheduleHoldExpiry` so tests drive
   the 20 s hold without sleeping.
 
+## MCP management tools (`/mcp`)
+
+`/management` and `/mcp` are one optional management toolset and share `management.secret`.
+The singleton WebSocket remains the push/event and close/release interface for an orchestrator;
+Streamable HTTP MCP is the agent-facing tool interface. Neither is a REST API. MCP is stateful,
+accepts the standard `GET`, `POST`, and `DELETE` transport methods, caps request bodies at 1 MiB,
+allows 32 sessions (a new session evicts the least recently used idle one when full; 503 only
+if all 32 have requests in flight), and expires sessions after 15 minutes idle.
+
+Both interfaces carry a long-lived bearer with authority over all profiles; MCP additionally
+changes live config and WhatsApp groups. Plain `http://`/`ws://` exposes credentials and payloads
+to passive and active network attackers. Use `https://` and `wss://` outside a trusted local path,
+keep the listener private/firewalled, and protect the proxy-to-router leg when TLS terminates at a
+reverse proxy. No CORS headers are emitted. MCP rejects a supplied foreign `Origin`, but clients
+may omit it, so the check is browser hardening rather than an auth or network boundary.
+
+All group tools except `join_group_by_invite` and `create_group` require a registry entry:
+
+| Tool                         | Semantics                                                                                                                                                                                                                            |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list_groups`                | List registry entries only; never discovers or lists all groups from WhatsApp.                                                                                                                                                       |
+| `get_group`                  | Registry entry plus live metadata.                                                                                                                                                                                                   |
+| `register_group`             | Register a known JID; with no explicit listen list, use `["*"]` only when the bot is the sole admin, otherwise `[]` (needs live metadata). An explicit listen list is a pure config write that works while WhatsApp is disconnected. |
+| `update_group`               | Set registry `display_name`.                                                                                                                                                                                                         |
+| `forget_group`               | Remove registry policy without leaving or changing routes.                                                                                                                                                                           |
+| `get_listen_list`            | Read the registry sender gate.                                                                                                                                                                                                       |
+| `set_listen_list`            | Replace the gate and set `listen_source: explicit`; wildcard must stand alone.                                                                                                                                                       |
+| `list_group_members`         | Read live participants/admin roles.                                                                                                                                                                                                  |
+| `modify_group_members`       | Add, remove, promote, or demote users.                                                                                                                                                                                               |
+| `list_group_join_requests`   | Read pending requests.                                                                                                                                                                                                               |
+| `review_group_join_requests` | Approve or reject requests.                                                                                                                                                                                                          |
+| `get_group_invite_code`      | Read the current invite code or null.                                                                                                                                                                                                |
+| `revoke_group_invite_code`   | Replace the invite code.                                                                                                                                                                                                             |
+| `join_group_by_invite`       | Join by code without registering or routing.                                                                                                                                                                                         |
+| `create_group`               | Create with optional participants without registering or routing.                                                                                                                                                                    |
+| `leave_group`                | Leave a registered group and optionally forget it after success. Not atomic: errors report `left`/`forgotten` and point to `forget_group` when the leave already happened.                                                           |
+| `update_group_settings`      | Set subject, description, announcement/restriction, ephemeral duration, member-add, or join-approval settings, sequentially; a failure stops the run and reports `updated`, `failed`, and `notAttempted`.                            |
+| `list_profiles`              | List profiles with secrets omitted.                                                                                                                                                                                                  |
+| `create_profile`             | Generate and persist a profile; return its relay credentials and environment lines.                                                                                                                                                  |
+| `delete_profile`             | Close and remove a non-last profile; repair `default_profile` when it named the deleted profile.                                                                                                                                     |
+| `close_profile`              | Close relay and start/reset a 20-second reconnect hold.                                                                                                                                                                              |
+| `release_profile`            | Cancel a hold without reconnecting or waking.                                                                                                                                                                                        |
+| `get_health`                 | Return router, WhatsApp, relay, hold, and buffer status.                                                                                                                                                                             |
+
+There is no group-delete tool because WhatsApp exposes leaving, not deleting. There is no
+WhatsApp discovery/list-all operation; callers need a known JID, an invite code, or a newly
+created group's returned JID.
+
+Config mutations are locked per path. The store reparses the current YAML with source tokens,
+applies the narrow edit, formats phone identities as quoted bare numbers, validates the whole
+candidate, writes and fsyncs a mode-0600 temporary file, atomically renames it, fsyncs the parent
+directory, and reloads the in-memory config. This preserves unrelated comments and makes dynamic
+profile create/delete and group policy changes visible without restart.
+
+While the router runs, it owns `config.yaml`: the operator must not edit the file by hand. There
+is no file watch or reload signal, so a hand edit is not applied when saved. It is applied by the
+next MCP mutation, because each mutation reparses the file from disk. An invalid edit makes every
+mutation fail until it is fixed, and an edit made while a mutation runs can be overwritten. To
+change config by hand, stop the router, edit, then start it.
+
 ## WhatsApp mapping rules (Baileys 7)
 
 - **Socket**: `makeWASocket({version (fetchLatestBaileysVersion with 15 s timeout, fallback cached/default), auth:{creds, keys: makeCacheableSignalKeyStore(state.keys, logger)}, logger: pino, browser:['WhatRouter','Chrome','120.0'], syncFullHistory:false, markOnlineOnConnect:false, getMessage: bounded store lookup else {conversation:''}, cachedGroupMetadata: LRU})`. Auth state: `useMultiFileAuthState(<data_dir>/wa-auth)`; `creds.update → saveCreds`.
@@ -305,7 +368,9 @@ session`. WS ping every 30 s, 60 s pong timeout, independent of relay sessions.
 - **Identity/LID**: bot ids = normalized `{sock.user.id, sock.user.lid}` (strip `:device`). Sender: `key.participant || key.remoteJid`; alt: `key.participantAlt || key.remoteJidAlt`. **Canonical id** = the `@s.whatsapp.net` form when either is PN, else `@lid`. DM `chat_id` = canonical sender; group `chat_id` = `…@g.us`. Keep `canonical → last raw remoteJid` map for outbound targeting (send to raw when known, else canonical).
 - **Route matching**: DM routes accept `+34600000000`, `34600000000`, `34600000000@s.whatsapp.net`, `<n>@lid` (digits compared); group routes accept `<n>@g.us`. A chat matching two profiles is a **config error**.
 - **Ingest filter**: skip `type ∉ {notify, append}`, `msg.message == null`, `key.fromMe`, `status@broadcast`, `@newsletter`, protocol/reaction/poll-update messages. Unwrap `ephemeralMessage / viewOnceMessage(V2) / documentWithCaptionMessage`. Bounded message store (512) for quoting/reacting/getMessage.
-- **Relevance (groups)**: deliver when route `require_mention` (default true) is false, OR text starts with `/`, OR `contextInfo.mentionedJid ∩ botIds ≠ ∅`, OR reply-to-bot (`contextInfo.participant ∈ botIds`). Precedence: route setting > gateway `/relay/policy.requireAddress` > default true. Optional `allowed_senders` on group routes.
+- **Group registry gate**: every inbound group must exist in top-level `groups`; an absent (rogue) group is logged and dropped before routing. `listen: ["*"]` accepts all senders and `"*"` must be the sole item; `listen: []` accepts none; otherwise PN or LID identity matching includes the message's alternate identity.
+- **Registry/routing independence**: registration does not route a group and a profile route does not register it. After the registry/listen gate, normal route or `default_profile` resolution applies. Route `allowed_senders`, when present, is a further narrowing and cannot widen the registry listen list.
+- **Relevance (groups)**: deliver when route `require_mention` (default true) is false, OR text starts with `/`, OR `contextInfo.mentionedJid ∩ botIds ≠ ∅`, OR reply-to-bot (`contextInfo.participant ∈ botIds`). Precedence: route setting > gateway `/relay/policy.requireAddress` > default true.
 - **Reply context**: `reply_to_message_id = contextInfo.stanzaId`; `reply_to.text` from quoted message (conversation / extendedText / captions / `[Document: name]`); `reply_to.is_own = participant ∈ botIds`.
 - **Media inbound**: `downloadMediaMessage(msg,'buffer',{}, {logger, reuploadRequest: sock.updateMediaMessage})`; failures never drop the message (append `[image could not be downloaded]`). Kinds: image→`photo`, video/gif→`video`, ptt→`voice`, audio→`audio`, document→`document`, sticker→`sticker`, location→`location` with `[Location: name lat,lng]` text.
 - **Formatting out**: port Hermes `WhatsAppBehaviorMixin` markdown→WhatsApp: stash fenced + inline code; italic `*x*`→`_x_` before bold `**x**`→`*x*`; `~~x~~`→`~x~`; `# H`→`*H*`; `[t](u)`→`t (u)`; restore code. Then chunk.
@@ -313,6 +378,11 @@ session`. WS ping every 30 s, 60 s pong timeout, independent of relay sessions.
 - **Read receipts**: off by default (`whatsapp.send_read_receipts`).
 
 ## Config (`config.yaml`, validated with zod; `WHATROUTER_CONFIG` path, default `/data/config.yaml` in Docker, `./config.yaml` locally)
+
+In Docker, `/data/config.yaml` lives inside the existing writable `/data` volume alongside state.
+It must not be over-mounted as a separate read-only file because MCP mutations replace it
+atomically. Hand edits are made only while the router is stopped (see the config writeback rules
+above).
 
 ```yaml
 listen: 0.0.0.0:8466
@@ -332,8 +402,14 @@ media:
   retention_seconds: 604800
 default_profile: null # null = drop unrouted chats
 allow_unrouted_outbound: false
-management: # optional; omit to disable GET /management
+management: # optional; omit to disable /management and /mcp
   secret: ${WHATROUTER_MANAGEMENT_SECRET} # or secret_file:; >= 32 chars, != every profile secret
+groups:
+  "120363001234567890@g.us":
+    display_name: Project Room
+    admins_seen: 2
+    listen_source: explicit
+    listen: ["34600000000", "987654321098765@lid"]
 profiles:
   work:
     gateway_id: gw-work
@@ -346,6 +422,13 @@ profiles:
         require_mention: true
         allowed_senders: ["+34600000000"]
 ```
+
+`groups` keys are normalized group JIDs. User identities everywhere (`groups.*.listen`, DM
+routes, group `allowed_senders`, and MCP user arguments) accept bare phone numbers, PN JIDs, or
+LID JIDs. Validation warns for LIDs in every persisted user-identity location because they are
+opaque and may not be portable. Config writes persist PN identities as human-readable quoted bare
+numbers and retain explicit `@lid` values. Registration defaults `listen` to `["*"]` only when live
+metadata shows the bot as the sole admin; every other no-input registration defaults to `[]`.
 
 Startup validation errors (exit 2): duplicate `gateway_id`, secret < 32 chars, chat routed to two
 profiles, malformed JIDs/phones, unpaired auth state in `serve` mode (message: run `whatrouter pair`).
@@ -443,7 +526,7 @@ Order: WP1 → (WP2 ∥ WP3) → WP4 → WP5. WP2/WP3 run in separate git worktr
 
 1. **Unit + integration**: `npm test` (Vitest) green; coverage on auth, frames, session, store, router, normalize, format.
 2. **Conformance vs real Hermes transport**: `HERMES_CHECKOUT=/path/to/hermes-agent scripts/conformance/run.sh` — starts WhatRouter with `WHATROUTER_FAKE_WHATSAPP=1`, drives `gateway.relay.ws_transport.WebSocketRelayTransport` (python + `websockets`; no LLM key, no full install) through all checks. I run this myself.
-3. **Docker**: `docker build -t whatrouter .`; `docker run --rm -v wr:/data -v $PWD/config.yaml:/data/config.yaml whatrouter check-config`; `serve` exits 2 with pairing instructions when unpaired.
+3. **Docker**: `docker build -t whatrouter .`; put `config.yaml` inside the writable `/data` volume and run `docker run --rm -v wr:/data whatrouter check-config`; `serve` exits 2 with pairing instructions when unpaired. Do not add a separate read-only config mount because MCP writes the live file.
 4. **Live pairing smoke (needs the user's phone)**: `docker run --rm -it -v wr:/data whatrouter pair` → scan → "connected as <number>" → restart `serve` → `/healthz` shows `connected`; repeat launch needs no QR.
 5. **Live E2E with one Hermes instance**: paste `whatrouter env work` output into `~/.hermes/.env`, `hermes gateway restart`; DM the bot number from a routed phone → Hermes reply arrives (markdown converted, quoted reply); group with `require_mention` only answers @mentions; send a photo and a voice note → Hermes receives media; stop the gateway, send 3 messages, restart → delivered in order once.
 

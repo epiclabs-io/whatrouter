@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldDeliver } from "../../src/router/relevance.js";
+import { shouldDeliver, shouldListenToGroup } from "../../src/router/relevance.js";
 import type { RelayPolicy } from "../../src/store/policy.js";
 import type { InboundMessage } from "../../src/whatsapp/port.js";
 import { ALICE, BOB, GROUP, dmRoute, groupRoute, inbound } from "../helpers/router.js";
@@ -21,6 +21,34 @@ describe("shouldDeliver: DMs", () => {
     expect(shouldDeliver(inbound({ text: "no mention here" }), null, null)).toEqual({
       deliver: true,
     });
+  });
+});
+
+describe("shouldListenToGroup", () => {
+  it("supports wildcard and deny-all lists", () => {
+    expect(shouldListenToGroup(groupMessage(), ["*"])).toEqual({ deliver: true });
+    expect(shouldListenToGroup(groupMessage(), [])).toEqual({
+      deliver: false,
+      reason: "group_sender_not_listened",
+    });
+  });
+
+  it("matches either the primary or alternate sender identity", () => {
+    expect(shouldListenToGroup(groupMessage(), [ALICE])).toEqual({ deliver: true });
+    expect(
+      shouldListenToGroup(groupMessage({ senderId: "777888999@lid", senderIdAlt: ALICE }), [ALICE])
+    ).toEqual({ deliver: true });
+    expect(
+      shouldListenToGroup(groupMessage({ senderId: ALICE, senderIdAlt: "777888999@lid" }), [
+        "777888999@lid",
+      ])
+    ).toEqual({ deliver: true });
+  });
+
+  it("does not conflate PN and LID identities with the same digits", () => {
+    expect(
+      shouldListenToGroup(groupMessage({ senderId: "34600000001@lid", senderIdAlt: null }), [ALICE])
+    ).toEqual({ deliver: false, reason: "group_sender_not_listened" });
   });
 });
 

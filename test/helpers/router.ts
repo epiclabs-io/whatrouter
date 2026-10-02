@@ -58,6 +58,14 @@ export function profileWith(name: string, routes: Route[]): ProfileConfig {
 /** Two profiles: `a` owns Alice's DM and the group, `b` owns Bob's DM. */
 export function routerConfig(overrides: Partial<Config> = {}): Config {
   return testConfig({
+    groups: {
+      [GROUP]: {
+        displayName: "Team",
+        adminsSeen: null,
+        listenSource: "explicit",
+        listen: ["*"],
+      },
+    },
     profiles: [
       profileWith("a", [dmRoute(ALICE), groupRoute(GROUP)]),
       profileWith("b", [dmRoute(BOB)]),

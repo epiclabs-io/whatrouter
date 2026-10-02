@@ -39,6 +39,8 @@ export interface MediaStore {
   get(id: string): { meta: MediaMeta; bytes: Buffer } | null;
   getMeta(id: string): MediaMeta | null;
   delete(id: string): boolean;
+  /** Deletes all metadata and files owned by one profile. */
+  purgeProfile(profile: string): number;
   purgeOlderThan(retentionSeconds: number, nowSeconds?: number): number;
 }
 
@@ -84,6 +86,7 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
   const selectOne = db.prepare("SELECT * FROM media WHERE id = ?");
   const deleteOne = db.prepare("DELETE FROM media WHERE id = ?");
   const selectExpired = db.prepare("SELECT id FROM media WHERE created_at < ?");
+  const selectProfile = db.prepare("SELECT id FROM media WHERE profile = ?");
 
   let dirReady = false;
   function ensureDir(): void {
@@ -177,6 +180,19 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
       }
       const removed = Number(deleteOne.run(id).changes) > 0;
       if (removed) {
+        unlink(id);
+      }
+      return removed;
+    },
+
+    purgeProfile(profile) {
+      const rows = selectProfile.all(profile) as Array<{ id?: unknown }>;
+      let removed = 0;
+      for (const row of rows) {
+        const id = String(row.id ?? "");
+        if (id !== "" && Number(deleteOne.run(id).changes) > 0) {
+          removed += 1;
+        }
         unlink(id);
       }
       return removed;

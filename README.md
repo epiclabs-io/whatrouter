@@ -6,7 +6,7 @@
 
 WhatRouter is a [Hermes Agent](https://github.com/NousResearch/hermes-agent) **Relay connector for
 WhatsApp**. It owns one WhatsApp account — a dedicated bot number, linked once with a QR code or a
-pairing code — and multiplexes it to any number of Hermes instances, using a static YAML file to
+pairing code — and multiplexes it to any number of Hermes instances, using a live YAML file to
 decide which chat belongs to which instance. Each instance is a _profile_ with its own
 `gateway_id` and secret; routes bind DMs (by phone number) and groups (by JID) to exactly one
 profile. Messages for an instance that is offline are buffered durably and replayed, in order and
@@ -41,6 +41,7 @@ conversational.
  | relay/      WS server /relay (HMAC bearer), NDJSON frames,        |
  |             per-profile session actor, sqlite buffer + replay,    |
  |             wake poke, /relay/policy, /relay/media, /healthz      |
+ | management/ WS /management + Streamable HTTP MCP /mcp, one secret |
  | store/      node:sqlite: buffer, idle flips, policies, media      |
  +-------------------------------------------------------------------+
                               ^  outbound-only dials (wss://.../relay)
@@ -58,6 +59,8 @@ Trust model:
   (`chat not routed to this profile`) unless `allow_unrouted_outbound: true`.
 - Nothing dials in to Hermes: gateways always dial out, so instances can sit behind NAT with no
   inbound ports and no certificates of their own.
+- The optional management credential controls every profile and WhatsApp group operation. It is
+  separate from all profile credentials and is shared only by `/management` and `/mcp`.
 
 **The protocol in one paragraph.** Each Hermes instance opens one outbound WebSocket to
 `GET /relay` with an `Authorization: Bearer` token derived by HMAC-SHA256 from its profile secret
@@ -78,15 +81,19 @@ Details: [docs/DESIGN.md](docs/DESIGN.md) — and the upstream contract this imp
 Compose builds the image from this checkout, so start by cloning the repo onto the host that will
 run WhatRouter (it needs a stable, reachable address if your Hermes instances live elsewhere).
 
-**1. Write the config.**
+**1. Write the config into the writable data volume.** The live Docker path is
+`/data/config.yaml`; do not mount that file separately read-only because MCP management tools
+update it. While WhatRouter is running it owns this file: **do not edit it by hand** then. Stop
+the container, edit, and start it again (see [Editing the live config](#editing-the-live-config)).
 
 ```bash
 git clone <repo-url> whatrouter && cd whatrouter
-cp config.example.yaml config.yaml
-openssl rand -hex 32          # one per profile, paste into config.yaml
+mkdir -p data
+cp config.example.yaml data/config.yaml
+openssl rand -hex 32          # one per profile, paste into data/config.yaml
 ```
 
-Edit `config.yaml`:
+Edit `data/config.yaml`:
 
 - **Keep `data_dir: /data`** (the volume). A relative path such as `./data` resolves under
   `/app` inside the container, which is not writable, and pairing fails with
@@ -178,7 +185,8 @@ whatrouter env work
 ```
 
 The config path is resolved in this order: `--config <path>`, then `$WHATROUTER_CONFIG`, then
-`./config.yaml`. In the Docker image `WHATROUTER_CONFIG=/data/config.yaml`. Exit codes are 0 for
+`./config.yaml`. In the Docker image `WHATROUTER_CONFIG=/data/config.yaml`; keep that live file in
+the writable `/data` volume. Exit codes are 0 for
 success, 1 for a runtime failure (pairing timed out, WhatsApp logged out), and 2 for a bad config
 or bad usage.
 
@@ -202,8 +210,9 @@ Top level:
 | `media.retention_seconds`      | int > 0              | `604800` (7 d)      | How long re-hosted media stays fetchable.                                                                                                                                                                                             |
 | `default_profile`              | profile name or null | null                | Profile that receives chats no route matches. Null means drop them (fail-closed).                                                                                                                                                     |
 | `allow_unrouted_outbound`      | bool                 | `false`             | Let a profile send to chats not routed to it. Leave it false unless you know why you need it.                                                                                                                                         |
-| `management.secret`            | string >= 32 chars   | —                   | Enables the `GET /management` orchestrator API (see [Management API](#management-api)). Must differ from every profile secret. Omit `management` to disable the route.                                                                |
+| `management.secret`            | string >= 32 chars   | —                   | Enables both management protocols, WebSocket `/management` and Streamable HTTP MCP `/mcp` (see [Management](#management)). Must differ from every profile secret. Omit `management` to disable both.                                  |
 | `management.secret_file`       | path                 | —                   | Read the management secret from a file instead (contents trimmed). Exactly one of `secret` / `secret_file`.                                                                                                                           |
+| `groups`                       | map                  | `{}`                | Registered-group allowlist and account-wide sender listen policy. Keys are normalized `<digits>(-<digits>)?@g.us` JIDs.                                                                                                               |
 | `profiles`                     | map                  | —                   | At least one. The key is the profile name used by `whatrouter env <name>`.                                                                                                                                                            |
 
 Per profile (`profiles.<name>`):
@@ -225,6 +234,28 @@ Per route — exactly one of `dm` or `group`:
 | `group`           | group      | The group JID, `<digits>@g.us`. WhatsApp groups have no other stable id.                                                 |
 | `require_mention` | group      | Only deliver messages that address the bot. Default true.                                                                |
 | `allowed_senders` | group      | If present, only these senders' messages are delivered. Same forms as `dm`.                                              |
+
+Per registered group (`groups.<group JID>`):
+
+| Key             | Type                               | Meaning                                                                                      |
+| --------------- | ---------------------------------- | -------------------------------------------------------------------------------------------- |
+| `display_name`  | string or null                     | Operator-facing label; registration defaults it to the live WhatsApp subject.                |
+| `admins_seen`   | nonnegative integer or null        | Admin count observed at registration; informational, not an authorization decision.          |
+| `listen_source` | `default_admin` or `explicit`      | Whether registration selected the listen list or a caller explicitly supplied/replaced it.   |
+| `listen`        | user identities or exactly `["*"]` | Account-wide sender gate. Empty drops everyone; `"*"` accepts everyone and must stand alone. |
+
+Group registration and profile routing are independent. Every inbound group must first be present
+in `groups` and pass its `listen` gate; unregistered (rogue) groups are logged and dropped. It must
+then resolve to a profile through a group route or `default_profile`. A route does not register a
+group, and registration does not route it. Route-level `allowed_senders`, when present, is an
+additional narrowing after `groups.<jid>.listen`; it never broadens the registry policy.
+
+When MCP registers a group without an explicit `listen`, it uses `["*"]` only if live metadata
+shows exactly one admin and that admin is the bot. Every other case defaults to `[]`. In all places
+that name users, WhatRouter accepts a bare phone number, `<digits>@s.whatsapp.net`, or
+`<digits>@lid`. LIDs are supported but opaque and potentially non-portable, so config validation
+warns wherever one appears. Mutable writes keep phone identities as human-readable quoted bare
+numbers and keep LIDs explicit.
 
 A group message is delivered when `require_mention` is off, **or** the text starts with `/`, **or**
 the bot is @mentioned, **or** the message is a reply to the bot. The setting is resolved route
@@ -285,7 +316,7 @@ threads (`supports_threads: false`), draft streaming, polls, and — unless you 
 
 `whatsapp` is one of `connected`, `connecting`, `disconnected`, `unpaired`. Per profile,
 `connected` means that Hermes instance currently holds a relay socket and `buffered` is how many
-events are waiting for it. While a [management hold](#management-api) is in force the profile
+events are waiting for it. While a [management hold](#management) is in force the profile
 also carries `blockedUntilMs` (epoch milliseconds); the field is absent otherwise. The
 container's `HEALTHCHECK` polls this endpoint.
 
@@ -318,20 +349,32 @@ WhatsApp account, equivalent to a linked device, and it is not encrypted.
 migrates forward on open, `wa-auth` is unaffected and buffered events survive, so instances
 reconnect and drain on their own. Re-pairing is only needed if WhatsApp logged the session out.
 
-**Rotating a profile secret.** Generate a new one (`openssl rand -hex 32`), put it in
-`config.yaml`, `docker compose restart whatrouter`, then update that one instance's
-`~/.hermes/.env` (`whatrouter env <profile>` prints the new lines) and `hermes gateway restart`.
+**Editing the live config.** While running, WhatRouter owns `/data/config.yaml`; only MCP tools
+change it. A hand edit is not picked up when saved (there is no file watch or reload signal). It
+silently goes live with the next MCP mutation, which reparses the file from disk. If the edit is
+invalid, every MCP mutation fails until it is fixed, and an edit made during a mutation can be
+overwritten. To edit by hand: `docker compose stop whatrouter`, edit,
+`docker compose run --rm whatrouter check-config`, then `docker compose start whatrouter`.
+
+**Rotating a profile secret.** Generate a new one (`openssl rand -hex 32`), then
+`docker compose stop whatrouter`, put it in `/data/config.yaml`, `docker compose start whatrouter`,
+then update that one instance's `~/.hermes/.env` (`whatrouter env <profile>` prints the new lines) and `hermes gateway restart`.
 Between those two steps the instance sees close code 4401 and stops reconnecting until it is
 restarted with the new secret; other profiles are unaffected, and its messages are buffered.
 
-## Management API
+## Management
 
-An external orchestrator can watch for new inbound messages per profile, suspend an idle agent and
-resume it when a message arrives. This is an optional, separate WebSocket route; the Hermes relay
-protocol on `/relay` is unchanged by it.
+The optional management toolset has two interfaces with one `management.secret`:
+
+- `/management` is a singleton WebSocket for push events plus `close_profile` and
+  `release_profile`; it is intended for a lifecycle orchestrator.
+- `/mcp` is Streamable HTTP MCP for agent-facing tools that inspect and change groups, profiles,
+  relay holds, and health.
+
+They are management protocols, not a REST API. The Hermes relay protocol on `/relay` is unchanged.
 
 **Setup.** Add a `management:` block with `secret` (or `secret_file`) and restart. Without the
-block, `/management` is rejected exactly like any unknown path. Generate the secret with
+block, `/management` is an unknown WebSocket path and `/mcp` returns 404. Generate the secret with
 `openssl rand -hex 32`; it must be at least 32 characters and differ from every profile secret.
 
 **Auth.** `GET /management` with `Authorization: Bearer <management secret>` and a WebSocket
@@ -340,11 +383,15 @@ completes the handshake and is then closed `4401 unauthorized`. Failed attempts 
 and do not count towards the relay's per-IP limit, so they can never lock out agents sharing that
 address. Profile secrets and relay tokens never grant management access.
 
-**Use TLS.** The management secret is a long-lived bearer credential with full control over every
-agent's relay session. Outside a trusted local network, reach `/management` only over `wss://`
-(for example, behind a TLS-terminating reverse proxy) — never plain `ws://` — and keep the port
-off the public internet where possible. Rotate the secret by changing it in the config and
-restarting WhatRouter.
+**Security boundary.** The management secret is a long-lived bearer credential with control over
+every agent session, dynamic profile credentials, live config, and WhatsApp group membership and
+settings. Plain HTTP or WebSocket exposes both the bearer and management data to observers and
+active attackers. Use `https://` for `/mcp` and `wss://` for `/management` outside a trusted
+host-local path. A TLS-terminating proxy protects only the client-to-proxy leg, so also trust or
+protect the proxy-to-WhatRouter network, bind WhatRouter privately, and firewall the listener.
+There are no CORS response headers. `/mcp` rejects a supplied cross-origin `Origin`, but non-browser
+clients can omit `Origin`, so this is not an authentication or network-exposure boundary. Rotate
+the secret by changing the config and restarting WhatRouter.
 Exactly one management client may be connected; a second one is closed `1008 duplicate
 management session`.
 
@@ -419,6 +466,49 @@ reconnect immediately. Outbound actions the agent had already started when its s
 cannot be cancelled — they may still reach WhatsApp, but their results are no longer reported to
 the agent.
 
+### MCP tools
+
+`/mcp` uses standard stateful Streamable HTTP MCP (`GET`, `POST`, and `DELETE`) with
+`Authorization: Bearer <management secret>`. Sessions expire after 15 minutes idle and the server
+allows at most 32 at once; when full, a new session evicts the least recently used idle one
+(clients that restart without `DELETE` cannot lock management out). These methods are MCP transport operations, not REST resources.
+
+| Tool                         | Semantics                                                                                                                                                                                                                           |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_groups`                | List the config registry only; it does not discover or list every WhatsApp group.                                                                                                                                                   |
+| `get_group`                  | Return registry data and live WhatsApp metadata for a registered group.                                                                                                                                                             |
+| `register_group`             | Add a known group JID to the registry; defaults `listen` using the sole-admin rule above (live lookup). With an explicit `listen`, no WhatsApp lookup is made, so it works offline.                                                 |
+| `update_group`               | Change a registered group's config `display_name`.                                                                                                                                                                                  |
+| `forget_group`               | Remove registry policy without leaving the WhatsApp group or changing profile routes.                                                                                                                                               |
+| `get_listen_list`            | Read a registered group's account-wide sender gate.                                                                                                                                                                                 |
+| `set_listen_list`            | Replace that gate and mark its source `explicit`; `"*"` must be the sole entry.                                                                                                                                                     |
+| `list_group_members`         | Return live participants and admin roles for a registered group.                                                                                                                                                                    |
+| `modify_group_members`       | Add, remove, promote, or demote listed users in a registered group.                                                                                                                                                                 |
+| `list_group_join_requests`   | Return live pending join requests for a registered group.                                                                                                                                                                           |
+| `review_group_join_requests` | Approve or reject listed pending requests.                                                                                                                                                                                          |
+| `get_group_invite_code`      | Return the current invite code, or null.                                                                                                                                                                                            |
+| `revoke_group_invite_code`   | Revoke the old invite code and return its replacement.                                                                                                                                                                              |
+| `join_group_by_invite`       | Join using an invite code; does not register or route the joined group.                                                                                                                                                             |
+| `create_group`               | Create a group with optional participants; does not register or route it.                                                                                                                                                           |
+| `leave_group`                | Leave a registered group and optionally forget its registry entry after success. Errors report `left`/`forgotten`; if the leave happened, call `forget_group` rather than retrying.                                                 |
+| `update_group_settings`      | Change subject, description, announcement/restriction, disappearing messages, member-add, or join-approval settings. Applied in order, stopping at the first failure; the result lists applied, failed, and not-attempted settings. |
+| `list_profiles`              | List live configured profile data with secrets removed.                                                                                                                                                                             |
+| `create_profile`             | Generate a profile and return new relay credentials and environment lines.                                                                                                                                                          |
+| `delete_profile`             | Close and delete a profile; refuses the last profile and repairs `default_profile` if needed.                                                                                                                                       |
+| `close_profile`              | Close its relay socket and start/reset the same 20-second reconnect hold as the WebSocket command.                                                                                                                                  |
+| `release_profile`            | Cancel that hold without reconnecting or waking Hermes.                                                                                                                                                                             |
+| `get_health`                 | Return router version, WhatsApp state, relay connections, holds, and buffer counts.                                                                                                                                                 |
+
+WhatsApp exposes no group deletion operation here: use `leave_group`, optionally with `forget`,
+or `forget_group` without leaving. There is also deliberately no WhatsApp group discovery or
+list-all tool; management starts from a known group JID, an invite, or `create_group`.
+
+Config-changing tools validate the complete candidate document, serialize writes per config path,
+write and fsync a mode-0600 temporary file, atomically rename it, fsync the directory, then reload
+the in-memory config. Group policy and profiles created or deleted through MCP therefore take
+effect without a process restart. The YAML document is edited in place so unrelated keys and
+comments are preserved.
+
 **Orchestrator workflow.**
 
 1. Connect to `/management` and `subscribe` to `message_pending`. Resume (start) every agent
@@ -441,7 +531,7 @@ the agent.
 | `serve` exits 2 with a `whatrouter pair` hint            | The WhatsApp account is not linked in this `data_dir`. Run `docker compose run --rm -it whatrouter pair` once, then start again — and check both commands use the same volume.                                                                                         |
 | Logs say the session was logged out; state is `unpaired` | The linked device was removed from the phone, or WhatsApp invalidated it. Delete `<data_dir>/wa-auth` and pair again.                                                                                                                                                  |
 | Messages from one contact never arrive                   | Their chat id is a LID (`<digits>@lid`), not a phone JID — common for first contact and privacy-enabled accounts, and the LID digits are unrelated to the phone number. Find the `unrouted chat dropped` log line, copy the id it prints, and add it as a `dm:` route. |
-| The bot ignores a group                                  | Mention gating. @mention it, reply to one of its messages, start the line with `/`, or set `require_mention: false` on that route. Check `allowed_senders` too, if you set it.                                                                                         |
+| The bot ignores a group                                  | The group must be registered, its `listen` gate must accept the sender, and a profile route or `default_profile` must select an agent. Then check mention gating and route-level `allowed_senders`.                                                                    |
 | Nothing arrives and nothing is buffered                  | The chat matches no route and `default_profile` is null, so it is dropped by design. Add a route or set `default_profile`.                                                                                                                                             |
 | Hermes cannot fetch media (`localhost` URLs, timeouts)   | `public_url` is unset or wrong, so media URLs point at WhatRouter's own localhost. Set it to an address the Hermes host can reach, then restart.                                                                                                                       |
 | Media upload rejected                                    | Larger than `media.max_bytes` (25 MiB by default), which is also close to WhatsApp's own limit.                                                                                                                                                                        |
