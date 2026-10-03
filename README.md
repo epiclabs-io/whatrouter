@@ -58,9 +58,10 @@ replayed oldest first, one message at a time. If buffered work appears while a p
 its optional `wake_url` is poked subject to the reconnect hold and wake cooldown.
 
 WhatRouter alone holds the WhatsApp credentials. Profile secrets and route checks isolate agents,
-and public media downloads are prevented from reaching private or otherwise non-public network
-addresses. The management secret can change every profile, session, route, and WhatsApp group; bind
-the listener privately and protect the transport if it leaves a trusted host or LAN.
+and media that an agent asks WhatRouter to fetch for `send_media` can never come from a private or
+otherwise non-public address. The management secret can change every profile, session, route, and
+WhatsApp group; bind the listener privately and protect the transport if it leaves a trusted host
+or LAN.
 
 The relay wire format follows the
 [upstream connector contract](https://hermes-agent.nousresearch.com/docs/developer-guide/relay-connector-contract).
@@ -273,8 +274,8 @@ authentication failures:
 HERMES_CHECKOUT=/path/to/hermes-agent scripts/conformance/run.sh
 ```
 
-It requires [uv](https://docs.astral.sh/uv/) and an existing Hermes checkout, but no phone, network,
-LLM key, or installation into that checkout.
+It requires [uv](https://docs.astral.sh/uv/) (which fetches a few Python packages) and an existing
+Hermes checkout, but no phone, LLM key, or installation into that checkout.
 
 | Path                   | Contents                                                                      |
 | ---------------------- | ----------------------------------------------------------------------------- |
