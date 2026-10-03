@@ -21,6 +21,34 @@ jobs:
       - run: npm run test
       - run: npm run build
 
+  # Drives a real Hermes gateway relay transport against a real WhatRouter, with
+  # the WhatsApp side faked. The Hermes checkout is pinned: the relay contract is
+  # experimental and additive-only, so re-run this on every bump of
+  # scripts/conformance/HERMES_PIN.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - id: pin
+        run: |
+          read -r spec _ < scripts/conformance/HERMES_PIN
+          echo "repo=${spec%@*}" >> "$GITHUB_OUTPUT"
+          echo "sha=${spec#*@}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pin.outputs.repo }}
+          ref: ${{ steps.pin.outputs.sha }}
+          path: hermes-agent
+      - uses: astral-sh/setup-uv@v6
+      - run: scripts/conformance/run.sh
+        env:
+          HERMES_CHECKOUT: ${{ github.workspace }}/hermes-agent
+
   docker:
     runs-on: ubuntu-latest
     steps:
