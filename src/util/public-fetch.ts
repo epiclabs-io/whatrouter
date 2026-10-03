@@ -167,11 +167,22 @@ interface Hop {
 
 type Attempt = { ok: true; hop: Hop } | { ok: false; error: string };
 
-/** One request, one response, with the body read under a byte cap. */
+/** One wording for the timeout, so a per-hop stall and an exhausted budget read the same. */
+function timedOut(totalMs: number): string {
+  return `could not fetch media: timed out after ${totalMs} ms`;
+}
+
+/**
+ * One request, one response, with the body read under a byte cap.
+ *
+ * `budgetMs` is what is left of the caller's deadline, not the whole timeout:
+ * redirects share one budget, so three hops cannot cost three timeouts.
+ */
 function requestOnce(
   url: URL,
   opts: PublicFetchOptions,
-  isBlocked: (ip: string) => boolean
+  isBlocked: (ip: string) => boolean,
+  budgetMs: number
 ): Promise<Attempt> {
   return new Promise((resolve) => {
     const transport = url.protocol === "https:" ? https : http;
@@ -253,9 +264,9 @@ function requestOnce(
     );
 
     timer = setTimeout(() => {
-      settle({ ok: false, error: `could not fetch media: timed out after ${opts.timeoutMs} ms` });
+      settle({ ok: false, error: timedOut(opts.timeoutMs) });
       req.destroy();
-    }, opts.timeoutMs);
+    }, budgetMs);
 
     req.on("error", (err: NodeJS.ErrnoException) => {
       // A refused address arrives as a request error raised inside `lookup`.
@@ -297,6 +308,10 @@ export async function fetchPublic(
     return { ok: false, error: NOT_ALLOWED };
   }
 
+  // One deadline for the whole fetch, redirects included: this is the timeout
+  // the caller asked for, and a chain of hops must not multiply it.
+  const deadline = Date.now() + opts.timeoutMs;
+
   let redirects = 0;
   for (;;) {
     if (target.protocol !== "http:" && target.protocol !== "https:") {
@@ -309,7 +324,12 @@ export async function fetchPublic(
       return { ok: false, error: NOT_ALLOWED };
     }
 
-    const attempt = await requestOnce(target, opts, isBlocked);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return { ok: false, error: timedOut(opts.timeoutMs) };
+    }
+
+    const attempt = await requestOnce(target, opts, isBlocked, remaining);
     if (!attempt.ok) {
       return attempt;
     }

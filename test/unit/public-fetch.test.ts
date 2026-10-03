@@ -268,4 +268,38 @@ describe("fetchPublic", () => {
     });
     expect(result).toEqual({ ok: false, error: "could not fetch media: timed out after 150 ms" });
   });
+
+  it("spends one timeout on the whole redirect chain, not one per hop", async () => {
+    // Every hop answers in 120 ms, which fits inside the 200 ms timeout, but
+    // the pair takes 240 ms. The chain must fail: the caller budgeted 200 ms
+    // for the whole fetch, and one timeout per hop would make it wait twice
+    // that before it could tell the agent anything.
+    const hopMs = 120;
+    const timeoutMs = 200;
+    const server = createServer(async (req, res) => {
+      await new Promise<void>((resolve) => setTimeout(resolve, hopMs));
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      const step = Number(url.pathname.slice(1) || "0");
+      res.writeHead(302, { location: `/${step + 1}` });
+      res.end();
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+
+    const started = Date.now();
+    const result = await fetchPublic(`http://127.0.0.1:${port}/0`, {
+      maxBytes: 1024,
+      timeoutMs,
+      isBlocked: allowLoopback,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: `could not fetch media: timed out after ${timeoutMs} ms`,
+    });
+    // Generous ceiling: the point is that it gave up rather than waiting 240 ms
+    // and succeeding.
+    expect(Date.now() - started).toBeLessThan(timeoutMs + hopMs);
+  });
 });
