@@ -1,9 +1,7 @@
 /**
- * Durable, ack-gated per-profile inbound buffer (docs/DESIGN.md §"Buffer /
- * delivery state machine"). Rows survive restarts; a row is deleted only when
- * the gateway acks its `bufferId`, which is what makes replay exactly-once as
- * observed by the gateway.
- *
+ * Durable, ack-gated per-profile inbound buffer. Rows survive restarts; a row
+ * is deleted only when the gateway acknowledges its `bufferId`, providing
+ * exactly-once replay as observed by the gateway.
  */
 import type { DatabaseSync } from "node:sqlite";
 import type { RelayEvent } from "../relay/frames.js";

@@ -1,4 +1,4 @@
-/** Shared fixtures for the WP2 relay/store tests (not a test file itself). */
+/** Shared fixtures for relay and store tests (not a test file itself). */
 import pino from "pino";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
 import type { Logger } from "../../src/util/log.js";

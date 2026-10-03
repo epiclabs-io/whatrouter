@@ -1,6 +1,6 @@
 /**
- * The capability descriptor we answer every `hello` with. Field-for-field the
- * table in docs/DESIGN.md: the gateway keys behaviour off these names.
+ * The capability descriptor returned for every `hello`. Its field names and
+ * semantics follow the upstream Hermes relay connector contract.
  */
 import type { CapabilityDescriptor } from "./frames.js";
 import type { Config } from "../config/schema.js";

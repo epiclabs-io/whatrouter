@@ -253,7 +253,9 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
   );
   tool(
     "register_group",
-    "Register a WhatsApp group for routing policy. Without listen, the sole-admin default is computed from live metadata; with listen, no WhatsApp lookup is made.",
+    "Register a WhatsApp group for routing policy; this does not add a profile route. " +
+      'If listen is omitted, fetch live metadata and use ["*"] only when the bot is the ' +
+      "group's sole admin; otherwise use []. An explicit listen needs no WhatsApp lookup.",
     {
       group_id: groupIdSchema,
       display_name: z.string().nullable().optional(),
@@ -446,7 +448,7 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
   );
   tool(
     "join_group_by_invite",
-    "Join a group using an invite code without registering it.",
+    "Join a WhatsApp group using an invite code. This does not register the group or add a profile route.",
     { code: z.string().min(1) },
     externalWrite,
     async ({ code }) => {
@@ -456,7 +458,7 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
   );
   tool(
     "create_group",
-    "Create a WhatsApp group without registering or routing it.",
+    "Create a WhatsApp group with the supplied participants. This does not register the group or add a profile route.",
     { subject: z.string().min(1), participant_ids: z.array(identitySchema).default([]) },
     externalWrite,
     async ({ subject, participant_ids }) => {
@@ -704,8 +706,8 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
     "rotate_profile_secret",
     "Replace a relay profile's secret and return the new credentials once. The profile's live " +
       "session is closed so the old secret stops working immediately; it must be restarted with " +
-      "the new one. Profiles whose secret comes from secret_file or an environment variable must " +
-      "be rotated where they are read.",
+      "the new one. Refuses profiles whose secret comes from secret_file or an environment " +
+      "variable; rotate those secrets at their source.",
     { name: z.string().trim().min(1) },
     destructiveConfigWrite,
     async ({ name }) => {
@@ -763,9 +765,9 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
   );
   tool(
     "delete_profile",
-    "Delete a relay profile after closing its live session. If the deleted profile was the " +
-      "default_profile, the default is cleared rather than moved to another profile, so " +
-      "unrouted DMs are dropped until a default is set again.",
+    "Delete a relay profile after closing its live session. Refuses to delete the last profile. " +
+      "If it was default_profile, clear the default rather than assigning another profile, so " +
+      "unrouted DMs are dropped until a new default is set.",
     { name: z.string().min(1) },
     destructiveConfigWrite,
     async ({ name }) => {
