@@ -23,7 +23,7 @@ import {
 } from "./routes.js";
 import type { Config, ProfileConfig } from "../config/schema.js";
 import type { OutboundAction, OutboundResult, RelayEvent } from "../relay/frames.js";
-import type { DeliveryOutcome } from "../relay/server.js";
+import type { DeliveryOutcome } from "../relay/hub.js";
 import type { Store } from "../store/db.js";
 import { MediaTooLargeError } from "../store/media.js";
 import type { Logger } from "../util/log.js";

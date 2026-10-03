@@ -631,7 +631,7 @@ profiles:
       live.once("open", () => resolve());
       live.once("error", reject);
     });
-    expect(handle.relay.isConnected("work")).toBe(true);
+    expect(handle.hub.isConnected("work")).toBe(true);
 
     const rotated = await client.callTool({
       name: "rotate_profile_secret",
@@ -653,7 +653,7 @@ profiles:
 
     // The connected gateway was told, rather than left to fail later.
     expect(await closed).toBe(4401);
-    expect(handle.relay.isConnected("work")).toBe(false);
+    expect(handle.hub.isConnected("work")).toBe(false);
 
     // The config really changed, so the old token is refused and the new one works.
     expect(configStore.get().profiles.find((p) => p.name === "work")?.secret).toBe(
@@ -797,7 +797,7 @@ profiles:
     handle.store.policy.set("ephemeral", { requireAddress: false });
     const media = handle.store.media.put("ephemeral", Buffer.from("old"), "text/plain");
     expect(existsSync(join(directory, "media", media.id))).toBe(true);
-    expect(handle.relay.closeProfile("ephemeral").success).toBe(true);
+    expect(handle.holds.closeProfile("ephemeral").success).toBe(true);
 
     const deleted = await client.callTool({
       name: "delete_profile",
@@ -816,7 +816,7 @@ profiles:
     expect(handle.store.media.getMeta(media.id)).toBeNull();
     expect(existsSync(join(directory, "media", media.id))).toBe(false);
     expect(
-      (handle.relay.health().profiles as Record<string, { blockedUntilMs?: number }>).ephemeral
+      (handle.health().profiles as Record<string, { blockedUntilMs?: number }>).ephemeral
     ).not.toHaveProperty("blockedUntilMs");
   });
 

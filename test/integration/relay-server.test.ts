@@ -1,41 +1,39 @@
 /**
- * End-to-end over a real socket: a real `ws` client speaking NDJSON against
- * `createRelayServer` on port 0, with a real sqlite store in a temp dir.
+ * The relay over a real socket: a real `ws` client speaking NDJSON against a
+ * `startServe` stack on port 0, with the fake WhatsApp port and a real sqlite
+ * store in a temp dir.
+ *
+ * Driven through `startServe` on purpose: the route table, the auth gate and the
+ * hub only meet in the composition root, so that is where the contract is worth
+ * pinning.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { debugInboundRoute } from "../../src/debug-inbound.js";
+import { createHttpServer, type HttpRoute } from "../../src/http/server.js";
 import { makeToken } from "../../src/relay/auth.js";
 import { LineAssembler } from "../../src/relay/ndjson.js";
-import { createRelayServer, type RelayServer } from "../../src/relay/server.js";
-import type { ConnectorFrame, OutboundAction, OutboundResult } from "../../src/relay/frames.js";
-import { openStore, type Store } from "../../src/store/db.js";
+import { startServe, type ServeHandle } from "../../src/serve.js";
+import type { ConnectorFrame } from "../../src/relay/frames.js";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
-import {
-  bootSettings,
-  delay,
-  silentLogger,
-  testConfig,
-  testEvent,
-  testProfile,
-} from "../helpers/relay.js";
+import type { Logger } from "../../src/util/log.js";
+import { delay, silentLogger, testConfig, testEvent, testProfile } from "../helpers/relay.js";
+import { dmRoute } from "../helpers/router.js";
 
-const WORK = testProfile("work");
+/** Owned by `work`, so an outbound action for it is routable. */
+const WORK_CHAT = "34600000000";
+const WORK = testProfile("work", { routes: [dmRoute(WORK_CHAT)] });
 const HOME = testProfile("home");
 
+const io = { out: (): void => undefined, err: (): void => undefined };
+
 interface Fixture {
-  server: RelayServer;
-  store: Store;
+  handle: ServeHandle;
   config: Config;
   port: number;
-  executed: Array<{ profile: string; action: OutboundAction; platform: string | undefined }>;
-  execute: (
-    profile: ProfileConfig,
-    action: OutboundAction,
-    platform?: string
-  ) => Promise<OutboundResult>;
   fetchMock: ReturnType<typeof vi.fn>;
 }
 
@@ -137,35 +135,25 @@ function token(
 }
 
 async function startServer(overrides: Partial<Config> = {}): Promise<Fixture> {
-  const config = testConfig({ profiles: [WORK, HOME], ...overrides });
-  const store = openStore(join(tempDir, "whatrouter.sqlite"), {
-    mediaDir: join(tempDir, "media"),
-    maxMediaBytes: config.media.maxBytes,
-  });
-  const executed: Fixture["executed"] = [];
+  const config = { ...testConfig({ profiles: [WORK, HOME], ...overrides }), dataDir: tempDir };
   const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
-  const execute = async (
-    profile: ProfileConfig,
-    action: OutboundAction,
-    platform?: string
-  ): Promise<OutboundResult> => {
-    executed.push({ profile: profile.name, action, platform });
-    if (action.op === "send") {
-      return { success: true, message_id: "wa-out-1" };
-    }
-    return { success: false, error: `unsupported op: ${action.op}` };
-  };
-  const server = createRelayServer({
-    getConfig: () => config,
-    ...bootSettings(config),
-    store,
+  const started = await startServe({
+    config,
     log: silentLogger(),
-    execute,
-    health: () => ({ status: "ok", whatsapp: "connected" }),
+    io,
+    fake: true,
+    signals: false,
     fetchImpl: fetchMock as unknown as typeof fetch,
   });
-  const { port } = await server.listen();
-  return { server, store, config, port, executed, execute, fetchMock };
+  if (!started.ok) {
+    throw new Error(`startServe failed with code ${started.code}`);
+  }
+  return {
+    handle: started.handle,
+    config,
+    port: started.handle.address.port,
+    fetchMock,
+  };
 }
 
 beforeEach(async () => {
@@ -177,17 +165,17 @@ afterEach(async () => {
   while (clients.length > 0) {
     clients.pop()?.close();
   }
-  await fixture.server.close();
-  fixture.store.close();
+  await fixture.handle.close();
   rmSync(tempDir, { recursive: true, force: true });
 });
 
 const base = (): string => `http://127.0.0.1:${fixture.port}`;
+const hub = (): Fixture["handle"]["hub"] => fixture.handle.hub;
+const store = (): Fixture["handle"]["store"] => fixture.handle.store;
 
 /** Replaces the running fixture (and its temp dir) with one for other profiles. */
 async function restartWith(profiles: ProfileConfig[]): Promise<void> {
-  await fixture.server.close();
-  fixture.store.close();
+  await fixture.handle.close();
   rmSync(tempDir, { recursive: true, force: true });
   tempDir = mkdtempSync(join(tmpdir(), "whatrouter-relay-"));
   fixture = await startServer({ profiles });
@@ -259,7 +247,7 @@ describe("upgrade auth", () => {
     await first.hello();
     const second = new RelayClient(fixture.port, token(WORK));
     expect(await second.closed()).toEqual({ code: 1008, reason: "duplicate session" });
-    expect(fixture.server.isConnected("work")).toBe(true);
+    expect(hub().isConnected("work")).toBe(true);
   });
 });
 
@@ -290,13 +278,13 @@ describe("handshake and framing", () => {
     const client = new RelayClient(fixture.port, token(WORK));
     await client.opened();
     client.sendRaw(
-      '{"type":"hello","platform":"whatsapp"}\n{"type":"outbound","requestId":"r1","action":{"op":"send","chat_id":"c","content":"hi"}}\n'
+      `{"type":"hello","platform":"whatsapp"}\n{"type":"outbound","requestId":"r1","action":{"op":"send","chat_id":"${WORK_CHAT}@s.whatsapp.net","content":"hi"}}\n`
     );
     await client.waitFor((f) => f.type === "descriptor");
     const result = await client.waitFor((f) => f.type === "outbound_result");
     expect(result).toMatchObject({
       requestId: "r1",
-      result: { success: true, message_id: "wa-out-1" },
+      result: { success: true },
     });
   });
 
@@ -318,18 +306,18 @@ describe("delivery", () => {
   it("delivers live (no bufferId) while connected and helloed", async () => {
     const client = new RelayClient(fixture.port, token(WORK));
     await client.hello();
-    expect(fixture.server.deliver("work", testEvent("live one"))).toBe("live");
+    expect(hub().deliver("work", testEvent("live one"))).toBe("live");
 
     const frame = await client.waitFor((f) => f.type === "inbound");
     expect(frame.bufferId).toBeUndefined();
     expect((frame.event as { text: string }).text).toBe("live one");
-    expect(fixture.server.bufferedCount("work")).toBe(0);
+    expect(store().buffer.count("work")).toBe(0);
   });
 
   it("buffers for a disconnected profile and never drops", () => {
-    expect(fixture.server.deliver("home", testEvent("while away"))).toBe("buffered");
-    expect(fixture.server.bufferedCount("home")).toBe(1);
-    expect(fixture.server.deliver("nobody", testEvent("nowhere"))).toBe("unknown_profile");
+    expect(hub().deliver("home", testEvent("while away"))).toBe("buffered");
+    expect(store().buffer.count("home")).toBe(1);
+    expect(hub().deliver("nobody", testEvent("nowhere"))).toBe("unknown_profile");
   });
 
   it("acks going_idle, then buffers instead of sending", async () => {
@@ -338,11 +326,11 @@ describe("delivery", () => {
     client.send({ type: "going_idle" });
     await client.waitFor((f) => f.type === "going_idle_ack");
 
-    expect(fixture.server.deliver("work", testEvent("idle one"))).toBe("buffered");
-    expect(fixture.server.deliver("work", testEvent("idle two"))).toBe("buffered");
+    expect(hub().deliver("work", testEvent("idle one"))).toBe("buffered");
+    expect(hub().deliver("work", testEvent("idle two"))).toBe("buffered");
     await delay(50);
     expect(client.of("inbound")).toHaveLength(0);
-    expect(fixture.server.bufferedCount("work")).toBe(2);
+    expect(store().buffer.count("work")).toBe(2);
   });
 
   it("replays in order on reconnect, exactly once", async () => {
@@ -350,8 +338,8 @@ describe("delivery", () => {
     await first.hello();
     first.send({ type: "going_idle" });
     await first.waitFor((f) => f.type === "going_idle_ack");
-    fixture.server.deliver("work", testEvent("one"));
-    fixture.server.deliver("work", testEvent("two"));
+    hub().deliver("work", testEvent("one"));
+    hub().deliver("work", testEvent("two"));
     first.close();
     await first.closed();
 
@@ -371,7 +359,7 @@ describe("delivery", () => {
     expect((secondReplay?.event as { text: string }).text).toBe("two");
     second.send({ type: "inbound_ack", bufferId: secondReplay?.bufferId as string });
     await delay(50);
-    expect(fixture.server.bufferedCount("work")).toBe(0);
+    expect(store().buffer.count("work")).toBe(0);
     second.close();
     await second.closed();
 
@@ -382,7 +370,7 @@ describe("delivery", () => {
     expect(third.of("inbound")).toHaveLength(0);
 
     // ...and live delivery works again.
-    expect(fixture.server.deliver("work", testEvent("live again"))).toBe("live");
+    expect(hub().deliver("work", testEvent("live again"))).toBe("live");
     const live = await third.waitFor((f) => f.type === "inbound");
     expect(live.bufferId).toBeUndefined();
   });
@@ -395,16 +383,19 @@ describe("outbound", () => {
     client.send({
       type: "outbound",
       requestId: "abc123",
-      action: { op: "send", chat_id: "34600000000@s.whatsapp.net", content: "hello" },
+      action: { op: "send", chat_id: `${WORK_CHAT}@s.whatsapp.net`, content: "hello" },
     });
     const result = await client.waitFor((f) => f.type === "outbound_result");
+    // `fake-1` is the fake WhatsApp port's first id, so this asserts the whole
+    // path: session -> router -> port -> back under the same requestId.
     expect(result).toEqual({
       type: "outbound_result",
       requestId: "abc123",
-      result: { success: true, message_id: "wa-out-1" },
+      result: { success: true, message_id: "fake-1" },
     });
-    expect(fixture.executed).toHaveLength(1);
-    expect(fixture.executed[0]?.profile).toBe("work");
+    expect(fixture.handle.fake?.sent).toMatchObject([
+      { kind: "text", chat: `${WORK_CHAT}@s.whatsapp.net`, text: "hello" },
+    ]);
   });
 
   it("refuses an action for a platform we do not front", async () => {
@@ -413,12 +404,12 @@ describe("outbound", () => {
     client.send({
       type: "outbound",
       requestId: "xyz",
-      action: { op: "send", chat_id: "c", content: "hi" },
+      action: { op: "send", chat_id: `${WORK_CHAT}@s.whatsapp.net`, content: "hi" },
       platform: "discord",
     });
     const result = await client.waitFor((f) => f.type === "outbound_result");
     expect(result).toMatchObject({ result: { success: false, error: "platform not fronted" } });
-    expect(fixture.executed).toHaveLength(0);
+    expect(fixture.handle.fake?.sent).toEqual([]);
   });
 });
 
@@ -431,7 +422,7 @@ describe("http routes", () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({});
-    expect(fixture.store.policy.get("work")).toEqual({
+    expect(store().policy.get("work")).toEqual({
       platform: "whatsapp",
       requireAddress: false,
     });
@@ -519,11 +510,11 @@ describe("http routes", () => {
   it("serves /healthz without auth", async () => {
     const client = new RelayClient(fixture.port, token(WORK));
     await client.hello();
-    fixture.server.deliver("home", testEvent("queued"));
+    hub().deliver("home", testEvent("queued"));
 
     const res = await fetch(`${base()}/healthz`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
+    expect(await res.json()).toMatchObject({
       status: "ok",
       whatsapp: "connected",
       profiles: {
@@ -533,7 +524,7 @@ describe("http routes", () => {
     });
   });
 
-  it("404s enrollment, provisioning, debug/inbound and anything unknown", async () => {
+  it("404s enrollment, provisioning and anything unknown", async () => {
     for (const path of ["/relay/enroll", "/relay/provision", "/nope"]) {
       const res = await fetch(`${base()}${path}`, {
         method: "POST",
@@ -542,8 +533,6 @@ describe("http routes", () => {
       expect(res.status, path).toBe(404);
       expect(await res.json()).toEqual({ error: "not found" });
     }
-    const debugRes = await fetch(`${base()}/debug/inbound`, { method: "POST", body: "{}" });
-    expect(debugRes.status).toBe(404);
   });
 
   it("429s after ten authentication failures from the same ip", async () => {
@@ -574,34 +563,51 @@ describe("http routes", () => {
 });
 
 describe("debug inbound", () => {
-  it("is served only when the caller wires it", async () => {
-    const injected: unknown[] = [];
-    const store = openStore(":memory:", { mediaDir: join(tempDir, "media2") });
-    const debugConfig = testConfig({ profiles: [WORK] });
-    const server = createRelayServer({
-      getConfig: () => debugConfig,
-      ...bootSettings(debugConfig),
-      store,
-      log: silentLogger(),
-      execute: async () => ({ success: true }),
-      health: () => ({ status: "ok" }),
-      debugInbound: async (body) => {
-        injected.push(body);
-      },
+  /** Mounts exactly the routes given, on port 0, and POSTs one body. */
+  async function postDebug(log: Logger, routes: HttpRoute[]): Promise<number> {
+    const server = createHttpServer({
+      listen: { host: "127.0.0.1", port: 0 },
+      routes,
+      upgrades: {},
+      log,
     });
     const { port } = await server.listen();
     try {
       const res = await fetch(`http://127.0.0.1:${port}/debug/inbound`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: "hi" }),
+        body: JSON.stringify({ chatId: "34600000009", text: "hi" }),
       });
-      expect(res.status).toBe(200);
-      expect(injected).toEqual([{ text: "hi" }]);
+      return res.status;
     } finally {
       await server.close();
-      store.close();
     }
+  }
+
+  it("is a route the caller mounts or does not", async () => {
+    const injected: unknown[] = [];
+    const log = silentLogger();
+    const route = debugInboundRoute(async (body) => {
+      injected.push(body);
+    }, log);
+
+    expect(await postDebug(log, [route])).toBe(200);
+    expect(injected).toMatchObject([
+      { chatId: "34600000009@s.whatsapp.net", chatType: "dm", text: "hi" },
+    ]);
+
+    // Without the route it is just an unknown path, which is what production
+    // gets in real-WhatsApp mode.
+    expect(await postDebug(log, [])).toBe(404);
+  });
+
+  it("is mounted by startServe in fake mode", async () => {
+    const res = await fetch(`${base()}/debug/inbound`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chatId: "34600000009", text: "from the test" }),
+    });
+    expect(res.status).toBe(200);
   });
 });
 
@@ -609,23 +615,23 @@ describe("wake poke", () => {
   it("fires once when the first event lands for a disconnected profile", async () => {
     await restartWith([testProfile("woken", { wakeUrl: "http://wake.invalid/hook" })]);
 
-    fixture.server.deliver("woken", testEvent("first"));
+    hub().deliver("woken", testEvent("first"));
     await delay(20);
     expect(fixture.fetchMock).toHaveBeenCalledTimes(1);
     expect(fixture.fetchMock.mock.calls[0]?.[0]).toBe("http://wake.invalid/hook");
 
     // A second event while the buffer is non-empty is not a new wake trigger.
-    fixture.server.deliver("woken", testEvent("second"));
+    hub().deliver("woken", testEvent("second"));
     await delay(20);
     expect(fixture.fetchMock).toHaveBeenCalledTimes(1);
 
     // Even after the buffer drains, the cooldown suppresses a second poke.
-    let next = fixture.store.buffer.nextUnacked("woken");
+    let next = store().buffer.nextUnacked("woken");
     while (next !== null) {
-      fixture.store.buffer.ack("woken", next.seq);
-      next = fixture.store.buffer.nextUnacked("woken");
+      store().buffer.ack("woken", next.seq);
+      next = store().buffer.nextUnacked("woken");
     }
-    fixture.server.deliver("woken", testEvent("third"));
+    hub().deliver("woken", testEvent("third"));
     await delay(20);
     expect(fixture.fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -636,7 +642,7 @@ describe("wake poke", () => {
 
     const client = new RelayClient(fixture.port, token(woken));
     await client.hello();
-    fixture.server.deliver("woken", testEvent("live"));
+    hub().deliver("woken", testEvent("live"));
     await delay(20);
     expect(fixture.fetchMock).not.toHaveBeenCalled();
   });
@@ -645,11 +651,11 @@ describe("wake poke", () => {
 describe("maintenance", () => {
   it("purges expired buffer rows and media on demand", () => {
     const now = Math.floor(Date.now() / 1000);
-    fixture.store.buffer.append("work", testEvent("ancient"), now - 3_000_000);
-    fixture.store.media.put("work", Buffer.from("old"), "text/plain", null, now - 3_000_000);
-    const swept = fixture.server.runMaintenance(now);
+    store().buffer.append("work", testEvent("ancient"), now - 3_000_000);
+    store().media.put("work", Buffer.from("old"), "text/plain", null, now - 3_000_000);
+    const swept = fixture.handle.runMaintenance(now);
     expect(swept).toEqual({ bufferPurged: 1, mediaPurged: 1 });
-    expect(fixture.server.bufferedCount("work")).toBe(0);
+    expect(store().buffer.count("work")).toBe(0);
   });
 });
 
@@ -658,9 +664,10 @@ describe("shutdown", () => {
     const client = new RelayClient(fixture.port, token(WORK));
     await client.hello();
     const closing = client.closed();
-    await fixture.server.close();
+    await fixture.handle.close();
     expect(await closing).toEqual({ code: 1001, reason: "going away" });
-    expect(fixture.server.address()).toBeNull();
+    // The socket is gone, so nothing is answering on that port any more.
+    await expect(fetch(`${base()}/healthz`)).rejects.toThrow();
   });
 });
 
