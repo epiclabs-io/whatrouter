@@ -11,6 +11,35 @@
  *   server -> client  {"type":"result","requestId":"…","result":{"success":…}}
  *                     {"type":"event","event":"message_pending","data":{…}}
  *
+ * Every valid request gets exactly one correlated `result`. `subscribe`
+ * atomically replaces the whole subscription; no event is published before its
+ * successful result. Its `pending` snapshot lists configured profiles with a
+ * non-empty durable buffer so clients can recover after missing events.
+ *
+ * `message_pending` is emitted once for each newly accepted inbound message,
+ * after deciding whether delivery is live or buffered. It is not emitted for
+ * buffer replay or unrouted messages and does not mean that Hermes processed
+ * the message. Events are best effort and non-durable: publishing never delays
+ * or fails inbound delivery. If queued output plus the next encoded frame would
+ * exceed 1 MiB, that frame is not sent and the connection closes with
+ * `1013 management client too slow`.
+ *
+ * `close_profile` synchronously starts or resets a 20-second, in-memory
+ * reconnect hold and detaches the live relay session before returning success.
+ * Relay reconnects during the hold close with
+ * `1013 profile temporarily suspended`; wake pokes are suppressed. Natural
+ * expiry may issue one normal wake poke when buffered work remains.
+ * `release_profile` cancels the hold without reconnecting Hermes, touching the
+ * detached socket, clearing buffered messages, or issuing a wake poke.
+ *
+ * An assembled NDJSON frame is limited to 64 KiB of UTF-8; a WebSocket message
+ * is limited to 1 MiB. Close codes are: `4401 unauthorized`,
+ * `1008 duplicate management session`, `1008 invalid management frame`,
+ * `1003 text frames only`, `1009 management frame too large` (or a WebSocket
+ * message over 1 MiB), `1013 management client too slow`, and
+ * `1001 going away`. Closing a profile closes that profile's relay socket with
+ * `1001 closed by management`; this is separate from the management socket.
+ *
  * Parsing is strict. A line that is not a JSON object with a usable
  * `requestId` cannot be answered and is fatal to the connection; anything
  * else that is wrong gets a correlated `{success:false}` result. Error strings

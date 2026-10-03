@@ -1,11 +1,11 @@
 /**
- * `InboundMessage` -> the relay `event` object the gateway's `_event_from_wire`
- * consumes. Field names and shape are verbatim from docs/DESIGN.md §"Inbound
- * event shape"; nothing here is decorative, the gateway reads every key.
+ * `InboundMessage` -> the relay `event` object consumed by the Hermes gateway's
+ * `_event_from_wire`. Field names and shape follow the upstream Hermes relay
+ * connector contract.
  *
- * `media_urls` and `media[]` are only present when there is media, and
- * `media[i].url` MUST also appear in `media_urls` (the gateway resolves the mime
- * type by URL lookup, not by position).
+ * `media_urls` and `media[]` are present only when there is media, and
+ * `media[i].url` MUST also appear in `media_urls`; the gateway resolves the MIME
+ * type by URL lookup rather than by position.
  */
 import { digitsOf } from "../whatsapp/jid.js";
 import { isCommandText } from "./relevance.js";

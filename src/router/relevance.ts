@@ -3,7 +3,7 @@
  *
  * DMs always do. Groups are noisy, so by default only messages that *address*
  * the bot get through (an @mention, a reply to one of our messages, or a slash
- * command). Precedence, per docs/DESIGN.md:
+ * command). Mention-gating precedence:
  *
  *   route.require_mention  >  gateway policy.requireAddress  >  true
  *

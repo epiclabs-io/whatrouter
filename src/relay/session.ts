@@ -1,19 +1,15 @@
 /**
  * Per-profile relay session: a pure state machine over the NDJSON frames.
- * No sockets, no timers, no I/O beyond the store — the server owns the
- * WebSocket and just hands frames in and gets frames out, which is what makes
- * the delivery semantics unit-testable.
+ * No sockets, no timers, no I/O beyond the store - the server owns the
+ * WebSocket and hands frames in and gets frames out, making the delivery
+ * semantics unit-testable.
  *
- * Delivery rules (docs/DESIGN.md §"Buffer / delivery state machine"):
- *   live  <=> hello seen ∧ ¬idle_flipped ∧ no in-flight bufferId ∧ buffer empty
- *   else  -> append to the durable buffer and pump
- *   pump  -> send the oldest unacked row with `bufferId`, wait for its
- *            `inbound_ack`, delete it, repeat; on empty clear the durable flip
- *            and go live.
- *
- * `idleFlipped` starts false on every new session: the durable flip only gates
- * *live* delivery, so a reconnect after `going_idle` still drains the buffer
- * (and clearing it on drain is what re-enables live delivery).
+ * A new session buffers until `hello` arrives and the durable buffer has
+ * drained or been confirmed empty. The pump sends the oldest unacknowledged row
+ * with a `bufferId`, waits for its matching `inbound_ack`, deletes it, and
+ * repeats. Once drained, new events are delivered live while no row is awaiting
+ * acknowledgement. `going_idle` disables live delivery for the rest of that
+ * session; a reconnect creates a fresh session that drains the durable buffer.
  */
 import type { Logger } from "../util/log.js";
 import type { Store } from "../store/db.js";
