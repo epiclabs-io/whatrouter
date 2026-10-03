@@ -23,7 +23,7 @@ import {
 } from "./routes.js";
 import type { Config, ProfileConfig } from "../config/schema.js";
 import type { OutboundAction, OutboundResult, RelayEvent } from "../relay/frames.js";
-import type { DeliveryOutcome } from "../relay/server.js";
+import type { DeliveryOutcome } from "../relay/hub.js";
 import type { Store } from "../store/db.js";
 import { MediaTooLargeError } from "../store/media.js";
 import type { Logger } from "../util/log.js";
@@ -41,15 +41,22 @@ export interface RelayDeliverer {
 }
 
 export interface RouterOptions {
-  config: Config;
-  /** Returns the current config. A new object identity triggers a route-table rebuild. */
-  getConfig?: (() => Config) | undefined;
+  /**
+   * The live config. The router only reads what is meant to change under it:
+   * `profiles`, `groups` and `default_profile`. A new object identity triggers a
+   * route-table rebuild.
+   */
+  getConfig: () => Config;
   store: Store;
   log: Logger;
   whatsapp: WhatsAppPort;
   relay: RelayDeliverer;
   /** Public URL for a stored media id (see `relay/media-url.ts`). */
   mediaUrlFor: (id: string) => string;
+  /** `media.max_bytes`, captured at boot: the cap a download must respect. */
+  maxMediaBytes: number;
+  /** `allow_unrouted_outbound`, captured at boot: may an agent act on any chat? */
+  allowUnroutedOutbound: boolean;
   /** Test seam for outbound media fetching; same shape as `fetchPublic`. */
   fetchMedia?: ((url: string, opts: PublicFetchOptions) => Promise<PublicFetchResult>) | undefined;
 }
@@ -100,13 +107,13 @@ type MediaSource =
   | { ok: false; error: string };
 
 export function createRouter(opts: RouterOptions): Router {
-  const { config, store, log, whatsapp, relay, mediaUrlFor } = opts;
+  const { store, log, whatsapp, relay, mediaUrlFor } = opts;
   const fetchMedia = opts.fetchMedia ?? fetchPublic;
-  let activeConfig = config;
+  let activeConfig = opts.getConfig();
   let activeTable = buildRouteTable(activeConfig);
 
   function current(): { config: Config; table: RouteTable } {
-    const nextConfig = opts.getConfig?.() ?? config;
+    const nextConfig = opts.getConfig();
     if (nextConfig !== activeConfig) {
       activeConfig = nextConfig;
       activeTable = buildRouteTable(nextConfig);
@@ -346,7 +353,7 @@ export function createRouter(opts: RouterOptions): Router {
     // fetch is what reaches the network: `fetchPublic` refuses any address that
     // is not public (D1). Hermes passes public URLs straight through.
     const fetched = await fetchMedia(sourceUrl, {
-      maxBytes: current().config.media.maxBytes,
+      maxBytes: opts.maxMediaBytes,
       timeoutMs: MEDIA_FETCH_TIMEOUT_MS,
     });
     if (!fetched.ok) {
@@ -414,7 +421,7 @@ export function createRouter(opts: RouterOptions): Router {
       );
       return { success: false, error: "group is not registered" };
     }
-    if (!isRoutedTo(table, currentConfig, profile.name, chat)) {
+    if (!isRoutedTo(table, opts.allowUnroutedOutbound, profile.name, chat)) {
       log.warn(
         { profile: profile.name, chatId: chat, op },
         "refusing an outbound action for a chat this profile does not own"

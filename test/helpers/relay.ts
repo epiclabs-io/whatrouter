@@ -2,7 +2,23 @@
 import pino from "pino";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
 import type { Logger } from "../../src/util/log.js";
+import { sign } from "../../src/relay/auth.js";
 import type { RelayEvent } from "../../src/relay/frames.js";
+
+/**
+ * Mints a relay token the way the gateway does. Production only ever verifies
+ * tokens, so this lives with the tests that need to be a gateway.
+ */
+export function makeToken(
+  payload: string,
+  secret: string,
+  ttlSeconds: number,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): string {
+  const exp = ttlSeconds > 0 ? Math.floor(nowSeconds) + Math.floor(ttlSeconds) : 0;
+  const signed = `${payload}:${exp}`;
+  return Buffer.from(`${signed}:${sign(signed, secret)}`, "utf8").toString("base64url");
+}
 
 export function silentLogger(): Logger {
   return pino({ level: "silent" });

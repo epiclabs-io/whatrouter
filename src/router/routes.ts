@@ -59,10 +59,6 @@ export class RouteTable extends Map<string, RouteEntry> {
   rememberedProfile(chatId: string): string | undefined {
     return this.#delivered.get(canonicalChatId(chatId));
   }
-
-  get rememberedSize(): number {
-    return this.#delivered.size;
-  }
 }
 
 /**
@@ -142,11 +138,14 @@ export function resolveProfile(
  */
 export function isRoutedTo(
   table: RouteTable,
-  config: Config,
+  allowUnroutedOutbound: boolean,
   profileName: string,
   chatId: string
 ): boolean {
-  if (config.allowUnroutedOutbound) {
+  // A boot setting, so it arrives as its own argument rather than as the whole
+  // live config: this check gates every outbound action and must not answer to
+  // a value that changed under a running process.
+  if (allowUnroutedOutbound) {
     return true;
   }
   const id = canonicalChatId(chatId);

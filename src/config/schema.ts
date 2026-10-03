@@ -1,6 +1,6 @@
 /**
  * Raw YAML shape (zod) + the normalized `Config` the rest of the program uses.
- * Everything downstream of `loadConfig` sees canonical JIDs and camelCase fields.
+ * Everything downstream of validation sees canonical JIDs and camelCase fields.
  */
 import { z } from "zod";
 
@@ -72,7 +72,7 @@ export const rawConfigSchema = z.strictObject({
     .prefault({}),
   default_profile: z.string().nullable().default(null),
   allow_unrouted_outbound: z.boolean().default(false),
-  /** Omitted (or null) = the `/management` route does not exist. */
+  /** Omitted (or null) = the `/management` and `/mcp` routes do not exist. */
   management: managementSchema.nullable().default(null),
   groups: z.record(z.string(), groupSchema).default({}),
   profiles: z
@@ -135,7 +135,7 @@ export interface Config {
   media: { maxBytes: number; retentionSeconds: number };
   defaultProfile: string | null;
   allowUnroutedOutbound: boolean;
-  /** Static bearer secret for `GET /management`; null = route disabled. */
+  /** Static bearer secret for `/management` and `/mcp`; null = both routes disabled. */
   management: { secret: string } | null;
   groups: Record<`${string}@g.us`, GroupConfig>;
   profiles: ProfileConfig[];

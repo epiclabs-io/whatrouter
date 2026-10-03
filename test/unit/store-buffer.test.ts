@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { openStore, type Store } from "../../src/store/db.js";
 import { testEvent } from "../helpers/relay.js";
@@ -72,34 +73,13 @@ describe("buffer append/next/ack", () => {
   });
 });
 
-describe("buffered-only flip", () => {
-  it("is durable and only clears when the buffer is empty", () => {
-    const store = memStore();
-    expect(store.buffer.isBufferedOnly("work")).toBe(false);
-    store.buffer.setBufferedOnly("work", true);
-    expect(store.buffer.isBufferedOnly("work")).toBe(true);
-
-    const row = store.buffer.append("work", testEvent("one"));
-    expect(store.buffer.clearFlipIfEmpty("work")).toBe(false);
-    expect(store.buffer.isBufferedOnly("work")).toBe(true);
-
-    store.buffer.ack("work", row.seq);
-    expect(store.buffer.clearFlipIfEmpty("work")).toBe(true);
-    expect(store.buffer.isBufferedOnly("work")).toBe(false);
-    // Clearing an already-clear flip is still "cleared".
-    expect(store.buffer.clearFlipIfEmpty("work")).toBe(true);
-  });
-});
-
 describe("purge", () => {
-  it("purges one profile's events and flip without touching another", () => {
+  it("purges one profile's events without touching another", () => {
     const store = memStore();
     store.buffer.append("work", testEvent("work"));
     store.buffer.append("home", testEvent("home"));
-    store.buffer.setBufferedOnly("work", true);
     expect(store.buffer.purgeProfile("work")).toBe(1);
     expect(store.buffer.count("work")).toBe(0);
-    expect(store.buffer.isBufferedOnly("work")).toBe(false);
     expect(store.buffer.count("home")).toBe(1);
   });
 
@@ -125,12 +105,7 @@ describe("policies", () => {
       allowOtherBots: true,
       somethingNew: "ignored",
     });
-    expect(store.policy.get("work")).toEqual({
-      platform: "whatsapp",
-      requireAddress: false,
-      freeResponseScopes: ["dm"],
-      allowOtherBots: true,
-    });
+    expect(store.policy.get("work")).toEqual({ requireAddress: false });
   });
 
   it("overwrites on repeat and returns null for unknown profiles", () => {
@@ -144,14 +119,37 @@ describe("policies", () => {
 });
 
 describe("durability", () => {
-  it("survives a reopen of the same file (buffer, flip, policy)", () => {
+  it("drops the obsolete flips table when upgrading a version-1 database", () => {
+    const dir = tempDir();
+    const path = join(dir, "whatrouter.sqlite");
+    openStore(path, { mediaDir: join(dir, "media") }).close();
+
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE flips (profile TEXT PRIMARY KEY, buffered_only INTEGER NOT NULL);
+      INSERT INTO flips(profile, buffered_only) VALUES ('work', 1);
+      UPDATE schema_version SET version = 1;
+    `);
+    legacy.close();
+
+    const migrated = openStore(path, { mediaDir: join(dir, "media") });
+    stores.push(migrated);
+    expect(
+      migrated.db.prepare("SELECT name FROM sqlite_master WHERE name = 'flips'").get()
+    ).toBeUndefined();
+    expect(
+      (migrated.db.prepare("SELECT version FROM schema_version").get() as { version: number })
+        .version
+    ).toBe(2);
+  });
+
+  it("survives a reopen of the same file (buffer, policy)", () => {
     const dir = tempDir();
     const path = join(dir, "nested", "whatrouter.sqlite");
 
     const first = openStore(path, { mediaDir: join(dir, "media") });
     const row = first.buffer.append("work", testEvent("survivor"));
     first.buffer.append("work", testEvent("second"));
-    first.buffer.setBufferedOnly("work", true);
     first.policy.set("work", { requireAddress: true });
     first.close();
 
@@ -160,7 +158,6 @@ describe("durability", () => {
     expect(second.buffer.count("work")).toBe(2);
     expect(second.buffer.nextUnacked("work")).toMatchObject({ seq: row.seq });
     expect(second.buffer.nextUnacked("work")?.event.text).toBe("survivor");
-    expect(second.buffer.isBufferedOnly("work")).toBe(true);
     expect(second.policy.get("work")).toEqual({ requireAddress: true });
 
     // Migrations are idempotent: a third open must not throw or reset anything.

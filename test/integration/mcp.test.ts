@@ -10,9 +10,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { parse } from "yaml";
 import { ConfigStore } from "../../src/config/store.js";
-import { makeToken } from "../../src/relay/auth.js";
 import { startServe, type ServeHandle } from "../../src/serve.js";
-import { silentLogger, testConfig } from "../helpers/relay.js";
+import { makeToken, silentLogger, testConfig } from "../helpers/relay.js";
 
 const MANAGEMENT_SECRET = "mcp-management-secret-0123456789abcdef";
 const PROFILE_SECRET = "profile-secret-0123456789abcdef012345";
@@ -69,7 +68,7 @@ profiles:
     );
     configStore = await ConfigStore.load(configPath);
     const started = await startServe({
-      config: configStore.get(),
+      getConfig: () => configStore.get(),
       configStore,
       log: silentLogger(),
       io,
@@ -631,7 +630,7 @@ profiles:
       live.once("open", () => resolve());
       live.once("error", reject);
     });
-    expect(handle.relay.isConnected("work")).toBe(true);
+    expect(handle.hub.isConnected("work")).toBe(true);
 
     const rotated = await client.callTool({
       name: "rotate_profile_secret",
@@ -653,7 +652,7 @@ profiles:
 
     // The connected gateway was told, rather than left to fail later.
     expect(await closed).toBe(4401);
-    expect(handle.relay.isConnected("work")).toBe(false);
+    expect(handle.hub.isConnected("work")).toBe(false);
 
     // The config really changed, so the old token is refused and the new one works.
     expect(configStore.get().profiles.find((p) => p.name === "work")?.secret).toBe(
@@ -722,6 +721,51 @@ profiles:
     }
   });
 
+  it("takes profiles live but keeps the media cap at its boot value", async () => {
+    // The split the whole config refactor rests on: an operator who edits the
+    // file gets the new profile list without the running process quietly
+    // changing the limits it already enforces on open sockets and open files.
+    await configStore.mutate((doc) => {
+      doc.setIn(["media", "max_bytes"], 4096);
+    });
+    const boot = configStore.get().media.maxBytes;
+    expect(boot).toBe(4096);
+
+    const profile = configStore.get().profiles[0];
+    if (profile === undefined) {
+      throw new Error("fixture has no profile");
+    }
+    const upload = (): Promise<Response> =>
+      fetch(`${base}/relay/media`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${makeToken(profile.gatewayId, profile.secret, 300)}`,
+          "content-type": "application/octet-stream",
+        },
+        body: Buffer.alloc(64),
+      });
+
+    try {
+      // Under the boot cap: accepted.
+      expect((await upload()).status).toBe(200);
+
+      // Now shrink the cap live, to a value the boot one would never allow.
+      await configStore.mutate((doc) => {
+        doc.setIn(["media", "max_bytes"], 8);
+      });
+      expect(configStore.get().media.maxBytes).toBe(8);
+
+      // The live value is smaller than the payload, but the boot cap still
+      // governs, so the upload goes through rather than starting to 413.
+      const afterEdit = await upload();
+      expect(afterEdit.status).toBe(200);
+    } finally {
+      await configStore.mutate((doc) => {
+        doc.setIn(["media", "max_bytes"], boot);
+      });
+    }
+  });
+
   it("purges profile runtime state before allowing delete and same-name recreation", async () => {
     const created = await client.callTool({
       name: "create_profile",
@@ -748,11 +792,10 @@ profiles:
         message_id: "old-1",
       },
     });
-    handle.store.buffer.setBufferedOnly("ephemeral", true);
     handle.store.policy.set("ephemeral", { requireAddress: false });
     const media = handle.store.media.put("ephemeral", Buffer.from("old"), "text/plain");
     expect(existsSync(join(directory, "media", media.id))).toBe(true);
-    expect(handle.relay.closeProfile("ephemeral").success).toBe(true);
+    expect(handle.holds.closeProfile("ephemeral").success).toBe(true);
 
     const deleted = await client.callTool({
       name: "delete_profile",
@@ -766,21 +809,21 @@ profiles:
     expect(recreated.isError).not.toBe(true);
 
     expect(handle.store.buffer.count("ephemeral")).toBe(0);
-    expect(handle.store.buffer.isBufferedOnly("ephemeral")).toBe(false);
     expect(handle.store.policy.get("ephemeral")).toBeNull();
     expect(handle.store.media.getMeta(media.id)).toBeNull();
     expect(existsSync(join(directory, "media", media.id))).toBe(false);
     expect(
-      (handle.relay.health().profiles as Record<string, { blockedUntilMs?: number }>).ephemeral
+      (handle.health().profiles as Record<string, { blockedUntilMs?: number }>).ephemeral
     ).not.toHaveProperty("blockedUntilMs");
   });
 
-  it("keeps direct-Config serving available with clear read-only mutation errors", async () => {
+  it("keeps read-only getConfig serving available with clear mutation errors", async () => {
+    const config = testConfig({
+      dataDir: join(directory, "direct-data"),
+      management: { secret: MANAGEMENT_SECRET },
+    });
     const direct = await startServe({
-      config: testConfig({
-        dataDir: join(directory, "direct-data"),
-        management: { secret: MANAGEMENT_SECRET },
-      }),
+      getConfig: () => config,
       log: silentLogger(),
       io,
       fake: true,

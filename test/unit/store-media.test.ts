@@ -7,18 +7,12 @@ import { MediaTooLargeError, openStore, type Store } from "../../src/store/db.js
 const temps: string[] = [];
 const stores: Store[] = [];
 
-function fixture(opts: { maxBytes?: number; urlFor?: boolean } = {}): {
-  store: Store;
-  dir: string;
-} {
+function fixture(opts: { maxBytes?: number } = {}): { store: Store; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), "whatrouter-media-"));
   temps.push(dir);
   const store = openStore(join(dir, "db.sqlite"), {
     mediaDir: join(dir, "media"),
     maxMediaBytes: opts.maxBytes ?? 1024,
-    ...(opts.urlFor === true
-      ? { mediaUrlFor: (id: string): string => `https://wr.example/relay/media/${id}` }
-      : {}),
   });
   stores.push(store);
   return { store, dir };
@@ -57,12 +51,6 @@ describe("media put/get", () => {
       size: bytes.byteLength,
     });
     expect(store.media.getMeta(put.id)?.profile).toBe("work");
-  });
-
-  it("returns a public URL when the store knows how to build one", () => {
-    const { store } = fixture({ urlFor: true });
-    const put = store.media.put("work", Buffer.from("x"), "image/png");
-    expect(put.url).toBe(`https://wr.example/relay/media/${put.id}`);
   });
 
   it("rejects oversized media and leaves nothing behind", () => {
@@ -113,13 +101,5 @@ describe("media purge", () => {
     expect(store.media.getMeta(fresh.id)).not.toBeNull();
     expect(existsSync(join(dir, "media", fresh.id))).toBe(true);
     expect(store.media.purgeOlderThan(100, now)).toBe(0);
-  });
-
-  it("deletes one object explicitly", () => {
-    const { store, dir } = fixture();
-    const put = store.media.put("work", Buffer.from("gone"), "text/plain");
-    expect(store.media.delete(put.id)).toBe(true);
-    expect(store.media.delete(put.id)).toBe(false);
-    expect(existsSync(join(dir, "media", put.id))).toBe(false);
   });
 });

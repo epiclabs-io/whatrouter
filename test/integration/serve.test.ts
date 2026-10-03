@@ -10,14 +10,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { makeToken } from "../../src/relay/auth.js";
 import { LineAssembler } from "../../src/relay/ndjson.js";
-import { startServe, inboundFromDebugBody, type ServeHandle } from "../../src/serve.js";
+import { inboundFromDebugBody } from "../../src/debug-inbound.js";
+import { startServe, type ServeHandle } from "../../src/serve.js";
 import { openStoreFromConfig } from "../../src/store/db.js";
 import { mediaIdFromUrl } from "../../src/router/router.js";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
 import type { RelayEvent } from "../../src/relay/frames.js";
-import { delay, silentLogger, testConfig } from "../helpers/relay.js";
+import { delay, makeToken, silentLogger, testConfig } from "../helpers/relay.js";
 import { ALICE, BOB, CAROL, GROUP, dmRoute, groupRoute, profileWith } from "../helpers/router.js";
 
 const OPEN_GROUP = "120363000000000002@g.us";
@@ -162,7 +162,7 @@ describe("serve: routing, gating and isolation", () => {
     dataDir = mkdtempSync(join(tmpdir(), "whatrouter-serve-"));
     config = serveConfig(dataDir);
     const started = await startServe({
-      config,
+      getConfig: () => config,
       log: silentLogger(),
       io,
       fake: true,
@@ -411,7 +411,7 @@ describe("serve: default_profile", () => {
     dataDir = mkdtempSync(join(tmpdir(), "whatrouter-serve-default-"));
     const config = serveConfig(dataDir, { defaultProfile: "b" });
     const started = await startServe({
-      config,
+      getConfig: () => config,
       log: silentLogger(),
       io,
       fake: true,
@@ -481,7 +481,7 @@ describe("serve: default_profile is a DM-only fallback", () => {
       },
     });
     const started = await startServe({
-      config,
+      getConfig: () => config,
       log: silentLogger(),
       io,
       fake: true,
@@ -563,7 +563,6 @@ describe("serve: startup reconciliation", () => {
           message_id: "ghost-1",
         },
       });
-      store.buffer.setBufferedOnly("ghost", true);
       store.policy.set("ghost", { requireAddress: false });
       const ghostMedia = store.media.put("ghost", Buffer.from("ghost"), "text/plain");
 
@@ -589,7 +588,7 @@ describe("serve: startup reconciliation", () => {
       const realMedia = store.media.put("a", Buffer.from("real"), "text/plain");
 
       const started = await startServe({
-        config,
+        getConfig: () => config,
         log: silentLogger(),
         io,
         fake: true,
@@ -601,7 +600,6 @@ describe("serve: startup reconciliation", () => {
       handle = started.handle;
 
       expect(store.buffer.count("ghost")).toBe(0);
-      expect(store.buffer.isBufferedOnly("ghost")).toBe(false);
       expect(store.policy.get("ghost")).toBeNull();
       expect(store.media.getMeta(ghostMedia.id)).toBeNull();
       expect(existsSync(join(dataDir, "media", ghostMedia.id))).toBe(false);
@@ -630,12 +628,10 @@ describe("inboundFromDebugBody", () => {
       text: "hola",
       kind: "text",
       mentionsBot: false,
-      mentionedIds: [],
       quoted: null,
       media: null,
     });
     expect(m.messageId).toMatch(/^debug-\d+$/);
-    expect(m.timestamp).toBeGreaterThan(1_700_000_000);
   });
 
   it("infers a group chat from the jid and keeps an explicit sender", () => {
@@ -663,14 +659,13 @@ describe("inboundFromDebugBody", () => {
     expect(Buffer.from(bytes ?? new Uint8Array()).equals(JPEG)).toBe(true);
   });
 
-  it("maps a quote and mentions", () => {
+  it("maps a quote and the mention flag", () => {
     const m = inboundFromDebugBody({
       chatId: GROUP,
       chatType: "group",
       senderId: ALICE,
       text: "yes",
       mentionsBot: true,
-      mentionedIds: ["1000@s.whatsapp.net"],
       quoted: {
         messageId: "q1",
         text: "question?",
@@ -685,7 +680,6 @@ describe("inboundFromDebugBody", () => {
       isFromBot: true,
     });
     expect(m.mentionsBot).toBe(true);
-    expect(m.mentionedIds).toEqual(["1000@s.whatsapp.net"]);
   });
 
   it("rejects a body with no chat", () => {

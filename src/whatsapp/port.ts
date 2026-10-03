@@ -58,11 +58,8 @@ export interface InboundMessage {
   senderName: string;
   text: string;
   kind: MessageKind;
-  /** Unix seconds. */
-  timestamp: number;
+  /** Whether one of `contextInfo.mentionedJid` is us; what relevance gates on. */
   mentionsBot: boolean;
-  /** Normalized JIDs from `contextInfo.mentionedJid`. */
-  mentionedIds: string[];
   quoted: QuotedMessage | null;
   media: InboundMedia | null;
 }

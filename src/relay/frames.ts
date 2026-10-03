@@ -1,7 +1,7 @@
 /**
  * Wire types for the Hermes relay protocol (NDJSON over one WebSocket).
- * Field names are verbatim from `gateway/relay/ws_transport.py`. Types only:
- * the line assembler and the session state machine live in WP2.
+ * Field names are verbatim from `gateway/relay/ws_transport.py`. The line
+ * assembler and session state machine live in their own relay modules.
  */
 
 export type ChatKind = "dm" | "group";

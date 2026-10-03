@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { makeToken, parseBearer, peekPayload, sign, verifyToken } from "../../src/relay/auth.js";
+import { parseBearer, peekPayload, sign, verifyToken } from "../../src/relay/auth.js";
+import { makeToken } from "../helpers/relay.js";
 
 // Vectors generated from the real Hermes `gateway/relay/auth.py` at time.time() = NOW.
 const NOW = 1754700000;

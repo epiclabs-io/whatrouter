@@ -1,6 +1,6 @@
 /**
  * `/management` end-to-end over real sockets: a real `ws` management client and
- * real relay clients against `createRelayServer` on port 0, real sqlite store.
+ * real relay clients against a `startServe` stack on port 0, real sqlite store.
  * Hold deadlines run on an injected millisecond clock and hand-fired expiry
  * timers, so nothing here sleeps for 20 seconds.
  */
@@ -12,12 +12,11 @@ import { Writable } from "node:stream";
 import pino from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { makeToken } from "../../src/relay/auth.js";
+import { HOLD_MS } from "../../src/management/holds.js";
 import { LineAssembler } from "../../src/relay/ndjson.js";
-import { createRelayServer, HOLD_MS, type RelayServer } from "../../src/relay/server.js";
-import { openStore, type Store } from "../../src/store/db.js";
+import { startServe, type ServeHandle } from "../../src/serve.js";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
-import { delay, testConfig, testEvent, testProfile } from "../helpers/relay.js";
+import { delay, makeToken, testConfig, testEvent, testProfile } from "../helpers/relay.js";
 
 const MGMT_SECRET = "management-secret-0123456789abcdef-xyz";
 const WORK = testProfile("work", { wakeUrl: "http://wake.invalid/work" });
@@ -25,14 +24,15 @@ const HOME = testProfile("home");
 const START_MS = 1_790_870_400_000;
 
 interface Fixture {
-  server: RelayServer;
-  store: Store;
+  handle: ServeHandle;
   port: number;
   fetchMock: ReturnType<typeof vi.fn>;
   logs: string[];
   clock: { ms: number };
   timers: Array<{ fn: () => void; at: number; cancelled: boolean }>;
 }
+
+const io = { out: (): void => undefined, err: (): void => undefined };
 
 let fixture: Fixture;
 let tempDir: string;
@@ -159,15 +159,14 @@ class Relay extends Client {
 }
 
 async function startServer(overrides: Partial<Config> = {}): Promise<Fixture> {
-  const config = testConfig({
-    profiles: [WORK, HOME],
-    management: { secret: MGMT_SECRET },
-    ...overrides,
-  });
-  const store = openStore(join(tempDir, "whatrouter.sqlite"), {
-    mediaDir: join(tempDir, "media"),
-    maxMediaBytes: config.media.maxBytes,
-  });
+  const config = {
+    ...testConfig({
+      profiles: [WORK, HOME],
+      management: { secret: MGMT_SECRET },
+      ...overrides,
+    }),
+    dataDir: tempDir,
+  };
   const logs: string[] = [];
   const sink = new Writable({
     write(chunk: Buffer, _enc, cb): void {
@@ -178,15 +177,15 @@ async function startServer(overrides: Partial<Config> = {}): Promise<Fixture> {
   const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
   const clock = { ms: START_MS };
   const timers: Fixture["timers"] = [];
-  const server = createRelayServer({
-    config,
-    store,
+  const started = await startServe({
+    getConfig: () => config,
     log: pino({ level: "trace" }, sink),
-    execute: async () => ({ success: true, message_id: "wa-out-1" }),
-    health: () => ({ status: "ok" }),
+    io,
+    fake: true,
+    signals: false,
     fetchImpl: fetchMock as unknown as typeof fetch,
     nowMs: () => clock.ms,
-    scheduleHoldExpiry: (fn, delayMs) => {
+    scheduleHoldExpiry: (fn: () => void, delayMs: number) => {
       const timer = { fn, at: clock.ms + delayMs, cancelled: false };
       timers.push(timer);
       return () => {
@@ -194,8 +193,17 @@ async function startServer(overrides: Partial<Config> = {}): Promise<Fixture> {
       };
     },
   });
-  const { port } = await server.listen();
-  return { server, store, port, fetchMock, logs, clock, timers };
+  if (!started.ok) {
+    throw new Error(`startServe failed with code ${started.code}`);
+  }
+  return {
+    handle: started.handle,
+    port: started.handle.address.port,
+    fetchMock,
+    logs,
+    clock,
+    timers,
+  };
 }
 
 /** Moves the injected clock and fires every hold-expiry timer now due. */
@@ -225,14 +233,12 @@ afterEach(async () => {
   while (sockets.length > 0) {
     sockets.pop()?.close();
   }
-  await fixture.server.close();
-  fixture.store.close();
+  await fixture.handle.close();
   rmSync(tempDir, { recursive: true, force: true });
 });
 
 async function restart(overrides: Partial<Config>): Promise<void> {
-  await fixture.server.close();
-  fixture.store.close();
+  await fixture.handle.close();
   rmSync(tempDir, { recursive: true, force: true });
   tempDir = mkdtempSync(join(tmpdir(), "whatrouter-mgmt-"));
   fixture = await startServer(overrides);
@@ -304,7 +310,7 @@ describe("rejected upgrades survive a malformed first frame", () => {
       "/relay",
       `Bearer ${makeToken(WORK.gatewayId, WORK.secret, 300)}`
     );
-    expect(fixture.server.isConnected("work")).toBe(true);
+    expect(fixture.handle.hub.isConnected("work")).toBe(true);
   });
 
   it("a duplicate management session", async () => {
@@ -330,6 +336,8 @@ describe("auth and route", () => {
     expect(await missing.closed()).toEqual({ code: 4401, reason: "unauthorized" });
     const wrong = new Manager(fixture.port, `${MGMT_SECRET}-nope`);
     expect(await wrong.closed()).toEqual({ code: 4401, reason: "unauthorized" });
+    const bare = new Client(fixture.port, "/management", MGMT_SECRET);
+    expect(await bare.closed()).toEqual({ code: 4401, reason: "unauthorized" });
 
     const ok = new Manager(fixture.port);
     expect(await ok.subscribe("s1")).toMatchObject({ success: true });
@@ -348,7 +356,7 @@ describe("auth and route", () => {
     // Same IP: relay reconnects are unaffected, and so is the right secret.
     const relay = new Relay(fixture.port, WORK);
     await relay.hello();
-    expect(fixture.server.isConnected("work")).toBe(true);
+    expect(fixture.handle.hub.isConnected("work")).toBe(true);
     const good = new Manager(fixture.port);
     expect(await good.subscribe("s1")).toMatchObject({ success: true });
   });
@@ -379,9 +387,9 @@ describe("auth and route", () => {
     await relay.hello();
     const manager = new Manager(fixture.port);
     await manager.subscribe("s1");
-    expect(fixture.server.isConnected("work")).toBe(true);
-    expect(fixture.server.isConnected("home")).toBe(false);
-    expect(fixture.server.deliver("work", testEvent("hi"))).toBe("live");
+    expect(fixture.handle.hub.isConnected("work")).toBe(true);
+    expect(fixture.handle.hub.isConnected("home")).toBe(false);
+    expect(fixture.handle.hub.deliver("work", testEvent("hi"))).toBe("live");
     await relay.waitFor((f) => f.type === "inbound");
   });
 });
@@ -471,7 +479,7 @@ describe("subscribe and events", () => {
   it("sends no events before a subscription", async () => {
     const manager = new Manager(fixture.port);
     await manager.opened();
-    fixture.server.deliver("home", testEvent("early"));
+    fixture.handle.hub.deliver("home", testEvent("early"));
     await delay(50);
     expect(manager.frames).toEqual([]);
   });
@@ -484,7 +492,7 @@ describe("subscribe and events", () => {
       pending: [],
     });
     expect(await manager.subscribe("s2")).toMatchObject({ success: true });
-    fixture.server.deliver("home", testEvent("one"));
+    fixture.handle.hub.deliver("home", testEvent("one"));
     await manager.waitFor((f) => f.type === "event");
     expect(manager.events()).toHaveLength(1);
 
@@ -493,7 +501,7 @@ describe("subscribe and events", () => {
       success: false,
       error: "unsupported event",
     });
-    fixture.server.deliver("home", testEvent("two"));
+    fixture.handle.hub.deliver("home", testEvent("two"));
     await manager.waitFor((f) => f.type === "event" && manager.events().length === 2);
 
     expect(await manager.subscribe("s4", [])).toEqual({
@@ -501,7 +509,7 @@ describe("subscribe and events", () => {
       events: [],
       pending: [{ profile: "home", gatewayId: "gw-home", bufferedCount: 2 }],
     });
-    fixture.server.deliver("home", testEvent("three"));
+    fixture.handle.hub.deliver("home", testEvent("three"));
     await delay(50);
     expect(manager.events()).toHaveLength(2);
   });
@@ -512,7 +520,7 @@ describe("subscribe and events", () => {
     manager.send({ type: "subscribe", requestId: "s1", events: ["message_pending"] });
     // Deliveries race the subscription; whichever lands after it is published.
     for (let i = 0; i < 20; i += 1) {
-      fixture.server.deliver("home", testEvent(`m${i}`));
+      fixture.handle.hub.deliver("home", testEvent(`m${i}`));
       await delay(1);
     }
     await manager.waitFor((f) => f.type === "result");
@@ -520,16 +528,16 @@ describe("subscribe and events", () => {
   });
 
   it("snapshots every profile whose durable buffer is non-empty", async () => {
-    fixture.server.deliver("work", testEvent("a"));
-    fixture.server.deliver("work", testEvent("b"));
-    fixture.server.deliver("work", testEvent("c"));
+    fixture.handle.hub.deliver("work", testEvent("a"));
+    fixture.handle.hub.deliver("work", testEvent("b"));
+    fixture.handle.hub.deliver("work", testEvent("c"));
     const manager = new Manager(fixture.port);
     expect(await manager.subscribe("s1")).toEqual({
       success: true,
       events: ["message_pending"],
       pending: [{ profile: "work", gatewayId: "gw-work", bufferedCount: 3 }],
     });
-    fixture.server.deliver("home", testEvent("d"));
+    fixture.handle.hub.deliver("home", testEvent("d"));
     expect((await manager.subscribe("s2")).pending).toEqual([
       { profile: "work", gatewayId: "gw-work", bufferedCount: 3 },
       { profile: "home", gatewayId: "gw-home", bufferedCount: 1 },
@@ -542,9 +550,9 @@ describe("subscribe and events", () => {
     const relay = new Relay(fixture.port, WORK);
     await relay.hello();
 
-    expect(fixture.server.deliver("work", testEvent("live"))).toBe("live");
-    expect(fixture.server.deliver("home", testEvent("away"))).toBe("buffered");
-    expect(fixture.server.deliver("ghost", testEvent("lost"))).toBe("unknown_profile");
+    expect(fixture.handle.hub.deliver("work", testEvent("live"))).toBe("live");
+    expect(fixture.handle.hub.deliver("home", testEvent("away"))).toBe("buffered");
+    expect(fixture.handle.hub.deliver("ghost", testEvent("lost"))).toBe("unknown_profile");
     await manager.waitFor(() => manager.events().length === 2);
     expect(manager.events()).toEqual([
       {
@@ -562,7 +570,7 @@ describe("subscribe and events", () => {
     // A connected but idle-flipped session buffers: still one event, "buffered".
     relay.send({ type: "going_idle" });
     await relay.waitFor((f) => f.type === "going_idle_ack");
-    expect(fixture.server.deliver("work", testEvent("idle"))).toBe("buffered");
+    expect(fixture.handle.hub.deliver("work", testEvent("idle"))).toBe("buffered");
     await manager.waitFor(() => manager.events().length === 3);
     expect(manager.events()[2]?.data).toEqual({
       profile: "work",
@@ -589,11 +597,11 @@ describe("subscribe and events", () => {
     await relay.hello();
     manager.ws.terminate();
     for (let i = 0; i < 50; i += 1) {
-      expect(fixture.server.deliver("work", testEvent(`m${i}`))).toBe("live");
+      expect(fixture.handle.hub.deliver("work", testEvent(`m${i}`))).toBe("live");
     }
     await relay.waitFor(() => relay.of("inbound").length === 50);
-    expect(fixture.server.deliver("home", testEvent("away"))).toBe("buffered");
-    expect(fixture.server.bufferedCount("home")).toBe(1);
+    expect(fixture.handle.hub.deliver("home", testEvent("away"))).toBe("buffered");
+    expect(fixture.handle.store.buffer.count("home")).toBe(1);
   });
 });
 
@@ -613,9 +621,9 @@ describe("close_profile", () => {
       retryAfterMs: 20_000,
     });
     // Synchronously disabled: the very next inbound buffers.
-    expect(fixture.server.isConnected("work")).toBe(false);
-    expect(fixture.server.deliver("work", testEvent("after close"))).toBe("buffered");
-    expect(fixture.server.bufferedCount("work")).toBe(1);
+    expect(fixture.handle.hub.isConnected("work")).toBe(false);
+    expect(fixture.handle.hub.deliver("work", testEvent("after close"))).toBe("buffered");
+    expect(fixture.handle.store.buffer.count("work")).toBe(1);
     expect(await health()).toMatchObject({
       work: { connected: false, buffered: 1, blockedUntilMs: START_MS + 20_000 },
     });
@@ -652,12 +660,12 @@ describe("close_profile", () => {
     const early = new Relay(fixture.port, WORK);
     expect(await early.closed()).toEqual({ code: 1013, reason: "profile temporarily suspended" });
     expect(early.frames).toEqual([]);
-    expect(fixture.server.isConnected("work")).toBe(false);
+    expect(fixture.handle.hub.isConnected("work")).toBe(false);
 
     advanceTo(START_MS + HOLD_MS);
     const onTime = new Relay(fixture.port, WORK);
     await onTime.hello();
-    expect(fixture.server.isConnected("work")).toBe(true);
+    expect(fixture.handle.hub.isConnected("work")).toBe(true);
     expect((await health()).work).toEqual({ connected: true, buffered: 0 });
   });
 
@@ -676,15 +684,15 @@ describe("close_profile", () => {
     const stillHeld = new Relay(fixture.port, WORK);
     expect((await stillHeld.closed()).code).toBe(1013);
 
-    expect(fixture.server.isConnected("home")).toBe(true);
-    expect(fixture.server.deliver("home", testEvent("unaffected"))).toBe("live");
+    expect(fixture.handle.hub.isConnected("home")).toBe(true);
+    expect(fixture.handle.hub.deliver("home", testEvent("unaffected"))).toBe("live");
     await home.waitFor((f) => f.type === "inbound");
     expect(home.closeInfo).toBeNull();
 
     advanceTo(START_MS + 35_000);
     const allowed = new Relay(fixture.port, WORK);
     await allowed.hello();
-    expect(fixture.server.isConnected("work")).toBe(true);
+    expect(fixture.handle.hub.isConnected("work")).toBe(true);
   });
 
   it("an old socket's close cannot remove a post-expiry session", async () => {
@@ -699,14 +707,14 @@ describe("close_profile", () => {
     advanceTo(START_MS + HOLD_MS);
     const fresh = new Relay(fixture.port, WORK);
     await fresh.hello();
-    expect(fixture.server.isConnected("work")).toBe(true);
+    expect(fixture.handle.hub.isConnected("work")).toBe(true);
     expect(old.closeInfo).toBeNull(); // the old close is still outstanding
 
     rawSocket.resume();
     expect(await old.closed()).toEqual({ code: 1001, reason: "closed by management" });
     await delay(50);
-    expect(fixture.server.isConnected("work")).toBe(true);
-    expect(fixture.server.deliver("work", testEvent("to fresh"))).toBe("live");
+    expect(fixture.handle.hub.isConnected("work")).toBe(true);
+    expect(fixture.handle.hub.deliver("work", testEvent("to fresh"))).toBe("live");
     await fresh.waitFor((f) => f.type === "inbound");
   });
 
@@ -715,12 +723,12 @@ describe("close_profile", () => {
     await relay.hello();
     relay.send({ type: "going_idle" });
     await relay.waitFor((f) => f.type === "going_idle_ack");
-    fixture.server.deliver("work", testEvent("one"));
+    fixture.handle.hub.deliver("work", testEvent("one"));
     const manager = new Manager(fixture.port);
     await manager.closeProfile("c1", "work");
     await relay.closed();
-    fixture.server.deliver("work", testEvent("two"));
-    expect(fixture.server.bufferedCount("work")).toBe(2);
+    fixture.handle.hub.deliver("work", testEvent("two"));
+    expect(fixture.handle.store.buffer.count("work")).toBe(2);
 
     advanceTo(START_MS + HOLD_MS);
     const back = new Relay(fixture.port, WORK);
@@ -732,7 +740,7 @@ describe("close_profile", () => {
     expect((second.event as { text: string }).text).toBe("two");
     back.send({ type: "inbound_ack", bufferId: second.bufferId as string });
     await delay(50);
-    expect(fixture.server.bufferedCount("work")).toBe(0);
+    expect(fixture.handle.store.buffer.count("work")).toBe(0);
   });
 });
 
@@ -743,7 +751,7 @@ describe("release_profile", () => {
     const manager = new Manager(fixture.port);
     await manager.closeProfile("c1", "work");
     await relay.closed();
-    fixture.server.deliver("work", testEvent("release me"));
+    fixture.handle.hub.deliver("work", testEvent("release me"));
 
     expect(await manager.releaseProfile("r1", "work")).toEqual({
       success: true,
@@ -798,8 +806,8 @@ describe("release_profile", () => {
     rawSocket.resume();
     await old.closed();
     await delay(50);
-    expect(fixture.server.isConnected("work")).toBe(true);
-    expect(fixture.server.deliver("work", testEvent("fresh"))).toBe("live");
+    expect(fixture.handle.hub.isConnected("work")).toBe(true);
+    expect(fixture.handle.hub.deliver("work", testEvent("fresh"))).toBe("live");
     await fresh.waitFor((frame) => frame.type === "inbound");
   });
 
@@ -810,7 +818,7 @@ describe("release_profile", () => {
     await delay(20);
     expect(fixture.fetchMock).not.toHaveBeenCalled();
 
-    fixture.server.deliver("work", testEvent("after release"));
+    fixture.handle.hub.deliver("work", testEvent("after release"));
     await delay(20);
     expect(fixture.fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -821,8 +829,8 @@ describe("wake during a hold", () => {
     const manager = new Manager(fixture.port);
     await manager.closeProfile("c1", "work");
 
-    fixture.server.deliver("work", testEvent("while held"));
-    fixture.server.deliver("work", testEvent("again"));
+    fixture.handle.hub.deliver("work", testEvent("while held"));
+    fixture.handle.hub.deliver("work", testEvent("again"));
     await delay(20);
     expect(fixture.fetchMock).not.toHaveBeenCalled();
 
@@ -840,7 +848,7 @@ describe("wake during a hold", () => {
     expect(fixture.fetchMock).not.toHaveBeenCalled();
 
     await manager.closeProfile("c2", "work");
-    fixture.server.deliver("work", testEvent("held"));
+    fixture.handle.hub.deliver("work", testEvent("held"));
     fixture.clock.ms = START_MS + 2 * HOLD_MS; // hold lapses, timer not fired yet
     const relay = new Relay(fixture.port, WORK);
     await relay.hello();
@@ -852,7 +860,7 @@ describe("wake during a hold", () => {
   it("only the newest hold's timer acts", async () => {
     const manager = new Manager(fixture.port);
     await manager.closeProfile("c1", "work");
-    fixture.server.deliver("work", testEvent("held"));
+    fixture.handle.hub.deliver("work", testEvent("held"));
     fixture.clock.ms = START_MS + 10_000;
     await manager.closeProfile("c2", "work");
     expect(fixture.timers.filter((t) => !t.cancelled)).toHaveLength(1);
@@ -876,7 +884,7 @@ describe("shutdown", () => {
     const managerClosed = manager.closed();
 
     const started = Date.now();
-    await fixture.server.close();
+    await fixture.handle.close();
     expect(Date.now() - started).toBeLessThan(4_000);
     expect(await managerClosed).toEqual({ code: 1001, reason: "going away" });
     expect(fixture.timers.every((t) => t.cancelled)).toBe(true);

@@ -13,7 +13,6 @@ import { Boom } from "@hapi/boom";
 import {
   DisconnectReason,
   downloadMediaMessage,
-  fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   makeWASocket,
   useMultiFileAuthState,
@@ -26,7 +25,6 @@ import {
   type WAMessage,
   type WAMessageKey,
   type WAPresence,
-  type WAVersion,
 } from "@whiskeysockets/baileys";
 import type { Config } from "../config/schema.js";
 import type { Logger } from "../util/log.js";
@@ -36,6 +34,7 @@ import { markdownToWhatsApp } from "./format.js";
 import { canonicalJid, digitsOf, isGroupJid, normalizeJid } from "./jid.js";
 import { createMessageStore, type MessageStore } from "./message-store.js";
 import { normalizeInbound } from "./normalize.js";
+import { resolveVersion } from "./resolve-version.js";
 import {
   buildDeletePayload,
   buildEditPayload,
@@ -123,7 +122,6 @@ export const defaultMakeSocket: MakeSocket = (config) =>
   makeWASocket(config) as unknown as SocketLike;
 
 export const AUTH_SUBDIR = "wa-auth";
-export const VERSION_FETCH_TIMEOUT_MS = 15_000;
 const GROUP_CACHE_TTL_MS = 5 * 60_000;
 const GROUP_CACHE_MAX = 256;
 const CHAT_MAP_MAX = 4096;
@@ -140,11 +138,7 @@ export interface BaileysClientOptions {
   authDir?: string | undefined;
 }
 
-export interface BaileysClient extends WhatsAppPort {
-  onStateChange(cb: (state: WhatsAppState) => void): void;
-  /** The auth directory in use (pairing instructions, tests). */
-  authDir(): string;
-}
+export type BaileysClient = WhatsAppPort;
 
 export function authDirFor(config: Config): string {
   return join(config.dataDir, AUTH_SUBDIR);
@@ -204,7 +198,6 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
   const groupCache = new Map<string, { metadata: BaileysGroupMetadata; expires: number }>();
   const rawByCanonical = new Map<string, string>();
   const nameByChat = new Map<string, string>();
-  const stateListeners: ((state: WhatsAppState) => void)[] = [];
 
   let state: WhatsAppState = "disconnected";
   let sock: SocketLike | null = null;
@@ -222,13 +215,6 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
     }
     state = next;
     log.info({ state: next }, "whatsapp state");
-    for (const cb of stateListeners) {
-      try {
-        cb(next);
-      } catch (err) {
-        log.error({ err }, "state listener failed");
-      }
-    }
   }
 
   function requireSocket(): SocketLike {
@@ -469,33 +455,12 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
     scheduleReconnect(delay);
   }
 
-  async function resolveVersion(): Promise<WAVersion | undefined> {
-    if (!fetchVersion) {
-      return undefined;
-    }
-    try {
-      const timeout = new Promise<null>((resolve) => {
-        const timer = setTimeout(() => resolve(null), VERSION_FETCH_TIMEOUT_MS);
-        timer.unref?.();
-      });
-      const result = await Promise.race([fetchLatestBaileysVersion(), timeout]);
-      if (result === null) {
-        log.warn("whatsapp version lookup timed out; using the bundled version");
-        return undefined;
-      }
-      return result.version;
-    } catch (err) {
-      log.warn({ err }, "whatsapp version lookup failed; using the bundled version");
-      return undefined;
-    }
-  }
-
   async function connect(): Promise<void> {
     if (stopped || auth === null) {
       return;
     }
     setState("connecting");
-    const version = await resolveVersion();
+    const version = await resolveVersion(fetchVersion, log);
     const next = makeSocket({
       ...(version === undefined ? {} : { version }),
       logger: waLogger,
@@ -593,14 +558,6 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
   }
 
   return {
-    authDir(): string {
-      return dir;
-    },
-
-    onStateChange(cb: (next: WhatsAppState) => void): void {
-      stateListeners.push(cb);
-    },
-
     state(): WhatsAppState {
       return state;
     },

@@ -17,6 +17,7 @@ import {
   parseUserIdentity,
 } from "../whatsapp/jid.js";
 import type { GroupMetadata, WhatsAppPort } from "../whatsapp/port.js";
+import { packageVersion } from "../version.js";
 
 export interface McpToolOptions {
   getConfig: () => Config;
@@ -209,7 +210,7 @@ function generateSecret(current: Config | undefined): string {
 }
 
 export function createMcpServer(opts: McpToolOptions): McpServer {
-  const server = new McpServer({ name: "whatrouter-management", version: "1.0.0" });
+  const server = new McpServer({ name: "whatrouter-management", version: packageVersion() });
   const tool = <Shape extends z.ZodRawShape>(
     name: string,
     description: string,
@@ -617,7 +618,7 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
         if (doc.getIn(["profiles", name], true) !== undefined) {
           throw new Error(`profile already exists: ${name}`);
         }
-        const current = opts.configStore?.current;
+        const current = opts.configStore?.get();
         secret = generateSecret(current);
         const usedGatewayIds = new Set(current?.profiles.map((profile) => profile.gatewayId) ?? []);
         do {
@@ -727,7 +728,7 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
               `profile "${name}" reads its secret from an environment variable; rotate it there`
             );
           }
-          secret = generateSecret(opts.configStore?.current);
+          secret = generateSecret(opts.configStore?.get());
           doc.setIn(["profiles", name, "secret"], secret);
         },
         () => {
