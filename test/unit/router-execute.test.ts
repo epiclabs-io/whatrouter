@@ -10,6 +10,7 @@ import { createFakeWhatsAppPort, type FakeWhatsAppPort } from "../../src/whatsap
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
 import type { OutboundAction, RelayEvent } from "../../src/relay/frames.js";
 import type { Store } from "../../src/store/db.js";
+import type { PublicFetchOptions, PublicFetchResult } from "../../src/util/public-fetch.js";
 import type { WhatsAppPort } from "../../src/whatsapp/port.js";
 import { silentLogger } from "../helpers/relay.js";
 import {
@@ -43,7 +44,7 @@ function build(
   config: Config = routerConfig(),
   overrides: {
     whatsapp?: WhatsAppPort;
-    fetchImpl?: typeof fetch;
+    fetchMedia?: (url: string, opts: PublicFetchOptions) => Promise<PublicFetchResult>;
     getConfig?: () => Config;
   } = {}
 ): Harness {
@@ -64,7 +65,7 @@ function build(
       },
     },
     mediaUrlFor: (id) => `${MEDIA_BASE}/relay/media/${id}`,
-    ...(overrides.fetchImpl === undefined ? {} : { fetchImpl: overrides.fetchImpl }),
+    ...(overrides.fetchMedia === undefined ? {} : { fetchMedia: overrides.fetchMedia }),
   });
   const a = config.profiles.find((p) => p.name === "a");
   const b = config.profiles.find((p) => p.name === "b");
@@ -287,13 +288,12 @@ describe("execute: send_media", () => {
   it("fetches a foreign URL and takes the mime from the response", async () => {
     h.store.close();
     rmSync(dir, { recursive: true, force: true });
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(bytes, {
-          headers: { "content-type": "image/png; charset=binary", "content-length": "4" },
-        })
-    );
-    h = build(routerConfig(), { fetchImpl: fetchImpl as unknown as typeof fetch });
+    const fetchMedia = vi.fn(async (): Promise<PublicFetchResult> => ({
+      ok: true,
+      bytes,
+      mime: "image/png",
+    }));
+    h = build(routerConfig(), { fetchMedia });
     const result = await run(h.a, {
       op: "send_media",
       chat_id: ALICE,
@@ -302,7 +302,12 @@ describe("execute: send_media", () => {
       filename: "cat.png",
     });
     expect(result).toEqual({ success: true, message_id: "fake-1" });
-    expect(fetchImpl).toHaveBeenCalledOnce();
+    // The cap and the timeout are the router's to set, and it passes them on.
+    expect(fetchMedia).toHaveBeenCalledOnce();
+    expect(fetchMedia.mock.calls[0]).toEqual([
+      "https://cdn.example.com/cat.png",
+      { maxBytes: routerConfig().media.maxBytes, timeoutMs: 30_000 },
+    ]);
     const sent = h.wa.sent[0];
     expect(sent?.kind === "media" ? sent.media : null).toMatchObject({
       mime: "image/png",
@@ -310,18 +315,21 @@ describe("execute: send_media", () => {
     });
   });
 
-  it("refuses a fetch that fails, is too large, or declares itself too large", async () => {
+  it("passes a fetch failure straight back to the agent", async () => {
     h.store.close();
     rmSync(dir, { recursive: true, force: true });
-    const responses = [
-      new Response("nope", { status: 404 }),
-      new Response(new Uint8Array(64), { headers: { "content-length": "64" } }),
-      new Response(new Uint8Array(64)),
+    const errors = [
+      "could not fetch media: HTTP 404",
+      "media is larger than 16 bytes",
+      "source_url not allowed",
     ];
-    const fetchImpl = vi.fn(async () => responses.shift() ?? new Response(null, { status: 500 }));
     const config = routerConfig();
     config.media.maxBytes = 16;
-    h = build(config, { fetchImpl: fetchImpl as unknown as typeof fetch });
+    const fetchMedia = vi.fn(async (): Promise<PublicFetchResult> => ({
+      ok: false,
+      error: errors.shift() ?? "gone",
+    }));
+    h = build(config, { fetchMedia });
     const send = async (): ReturnType<Router["execute"]> =>
       run(h.a, {
         op: "send_media",
@@ -331,7 +339,7 @@ describe("execute: send_media", () => {
       });
     expect(await send()).toEqual({ success: false, error: "could not fetch media: HTTP 404" });
     expect(await send()).toEqual({ success: false, error: "media is larger than 16 bytes" });
-    expect(await send()).toEqual({ success: false, error: "media is larger than 16 bytes" });
+    expect(await send()).toEqual({ success: false, error: "source_url not allowed" });
     expect(h.wa.sent).toEqual([]);
   });
 
@@ -364,6 +372,39 @@ describe("execute: send_media", () => {
         source_url: `${MEDIA_BASE}/relay/media/${id}`,
       })
     ).toEqual({ success: false, error: "chat not routed to this profile" });
+  });
+
+  it("refuses a source_url that resolves to a private or metadata address", async () => {
+    // No fetchMedia seam: this goes through the real fetchPublic, which must
+    // refuse the address before dialling it (D1).
+    for (const source_url of [
+      "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+      "http://127.0.0.1:8466/healthz",
+      "http://10.0.0.5/internal.png",
+      "http://192.168.1.10/camera.jpg",
+      "http://[::1]:9000/x.png",
+      "file:///etc/passwd",
+    ]) {
+      expect(
+        await run(h.a, { op: "send_media", chat_id: ALICE, media_kind: "image", source_url })
+      ).toEqual({ success: false, error: "source_url not allowed" });
+    }
+    expect(h.wa.sent).toEqual([]);
+  });
+
+  it("still sends a WhatRouter media url without touching the network", async () => {
+    const { id } = h.store.media.put("a", bytes, "image/jpeg", null);
+    const result = await run(h.a, {
+      op: "send_media",
+      chat_id: ALICE,
+      media_kind: "image",
+      source_url: `${MEDIA_BASE}/relay/media/${id}`,
+    });
+    expect(result).toEqual({ success: true, message_id: "fake-1" });
+    const sent = h.wa.sent[0];
+    expect(sent?.kind === "media" ? Buffer.from(sent.media.bytes) : null).toEqual(
+      Buffer.from(bytes)
+    );
   });
 });
 

@@ -26,6 +26,11 @@ import type { OutboundAction, OutboundResult, RelayEvent } from "../relay/frames
 import type { DeliveryOutcome } from "../relay/server.js";
 import type { Store } from "../store/db.js";
 import type { Logger } from "../util/log.js";
+import {
+  fetchPublic,
+  type PublicFetchOptions,
+  type PublicFetchResult,
+} from "../util/public-fetch.js";
 import type { InboundMessage, OutboundMedia, WhatsAppPort } from "../whatsapp/port.js";
 
 /** The slice of the relay server the router needs (kept narrow for tests and wiring). */
@@ -43,7 +48,8 @@ export interface RouterOptions {
   relay: RelayDeliverer;
   /** Public URL for a stored media id (see `relay/media-url.ts`). */
   mediaUrlFor: (id: string) => string;
-  fetchImpl?: typeof fetch | undefined;
+  /** Test seam for outbound media fetching; same shape as `fetchPublic`. */
+  fetchMedia?: ((url: string, opts: PublicFetchOptions) => Promise<PublicFetchResult>) | undefined;
 }
 
 export interface Router {
@@ -93,7 +99,7 @@ type MediaSource =
 
 export function createRouter(opts: RouterOptions): Router {
   const { config, store, log, whatsapp, relay, mediaUrlFor } = opts;
-  const doFetch = opts.fetchImpl ?? globalThis.fetch;
+  const fetchMedia = opts.fetchMedia ?? fetchPublic;
   let activeConfig = config;
   let activeTable = buildRouteTable(activeConfig);
 
@@ -242,26 +248,17 @@ export function createRouter(opts: RouterOptions): Router {
       };
     }
 
-    const res = await doFetch(sourceUrl, { signal: AbortSignal.timeout(MEDIA_FETCH_TIMEOUT_MS) });
-    if (!res.ok) {
-      return { ok: false, error: `could not fetch media: HTTP ${res.status}` };
+    // Anything that is not one of our own media ids is a remote fetch, and the
+    // fetch is what reaches the network: `fetchPublic` refuses any address that
+    // is not public (D1). Hermes passes public URLs straight through.
+    const fetched = await fetchMedia(sourceUrl, {
+      maxBytes: current().config.media.maxBytes,
+      timeoutMs: MEDIA_FETCH_TIMEOUT_MS,
+    });
+    if (!fetched.ok) {
+      return { ok: false, error: fetched.error };
     }
-    const declared = Number(res.headers.get("content-length"));
-    const maxBytes = current().config.media.maxBytes;
-    if (Number.isFinite(declared) && declared > maxBytes) {
-      return { ok: false, error: `media is larger than ${maxBytes} bytes` };
-    }
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.byteLength > maxBytes) {
-      return { ok: false, error: `media is larger than ${maxBytes} bytes` };
-    }
-    const contentType = (res.headers.get("content-type") ?? "").split(";")[0]?.trim() ?? "";
-    return {
-      ok: true,
-      bytes,
-      mime: contentType === "" ? "application/octet-stream" : contentType,
-      filename: null,
-    };
+    return { ok: true, bytes: fetched.bytes, mime: fetched.mime, filename: null };
   }
 
   async function sendMedia(
