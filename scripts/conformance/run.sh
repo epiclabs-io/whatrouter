@@ -52,6 +52,10 @@ default_profile: null
 allow_unrouted_outbound: false
 management:
   secret: ${MANAGEMENT_SECRET}
+groups:
+  "120363000000000001@g.us":
+    listen_source: explicit
+    listen: ["*"]
 profiles:
   a:
     gateway_id: gw-a
