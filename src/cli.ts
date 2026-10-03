@@ -76,7 +76,7 @@ function summarize(io: CliIo, path: string, config: Config): void {
   io.out(`listen: ${config.listen.host}:${config.listen.port}`);
   io.out(`public_url: ${config.publicUrl ?? "(none)"}`);
   io.out(`data_dir: ${config.dataDir}`);
-  io.out(`default_profile: ${config.defaultProfile ?? "(none, unrouted chats are dropped)"}`);
+  io.out(`default_profile: ${config.defaultProfile ?? "(none, unrouted DMs are dropped)"}`);
   io.out(`profiles: ${config.profiles.length} (${routeCount} routes)`);
   for (const profile of config.profiles) {
     const dms = profile.routes.filter((r) => r.kind === "dm").length;
