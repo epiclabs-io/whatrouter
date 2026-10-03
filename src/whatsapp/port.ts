@@ -22,13 +22,22 @@ export interface QuotedMessage {
 export interface InboundMedia {
   kind: MediaKind;
   mime: string;
-  bytes: Uint8Array;
   filename?: string;
   caption?: string;
-  size: number;
+  /** From the proto `fileLength` (number or Long); null when absent. */
+  declaredSize: number | null;
+  /**
+   * Downloads at most `maxBytes`; rejects with `MediaTooLargeError` beyond that.
+   *
+   * Deferred rather than done up front: whether an attachment is worth fetching
+   * at all depends on gates that run after normalization, and a download the
+   * router will drop is a WhatsApp request spent for nothing.
+   */
+  download(maxBytes: number): Promise<Uint8Array>;
 }
 
-/** Already normalized: canonical ids, unwrapped payload, downloaded media. */
+/** Already normalized: canonical ids and an unwrapped payload. Media is not
+ * downloaded; `media.download` does that once the router wants it. */
 export interface InboundMessage {
   messageId: string;
   /** Canonical chat id: `<digits>@g.us` for groups, canonical sender JID for DMs. */
@@ -36,7 +45,11 @@ export interface InboundMessage {
   /** `key.remoteJid` exactly as received (outbound targeting prefers this). */
   chatIdRaw: string;
   chatType: ChatType;
-  /** Group subject, or the sender's pushName for DMs. */
+  /**
+   * Group subject, or the sender's pushName for DMs. Empty for a group: the
+   * adapter must not spend a metadata request before the router's registry
+   * gate has decided the message is wanted, so the router fills it in.
+   */
   chatName: string;
   /** Canonical sender JID. */
   senderId: string;
@@ -52,8 +65,6 @@ export interface InboundMessage {
   mentionedIds: string[];
   quoted: QuotedMessage | null;
   media: InboundMedia | null;
-  /** Media was present but could not be downloaded; the message is delivered anyway. */
-  downloadFailed: boolean;
 }
 
 export interface OutboundMedia {

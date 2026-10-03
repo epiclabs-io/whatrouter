@@ -12,6 +12,7 @@ import {
   BOB,
   CAROL,
   GROUP,
+  ROGUE,
   dmRoute,
   groupRoute,
   inbound,
@@ -89,6 +90,22 @@ describe("resolveProfile", () => {
     const match = resolveProfile(table, config, inbound({ chatId: CAROL, senderId: CAROL }));
     expect(match?.profile.name).toBe("b");
     expect(match?.route).toBeNull();
+  });
+
+  it("does not extend default_profile to an unrouted group", () => {
+    const config = routerConfig({ defaultProfile: "b" });
+    const table = buildRouteTable(config);
+    // A group no profile claims: it belongs to everyone, so handing it to the
+    // default profile would answer people nobody routed here.
+    const m = inbound({ chatId: ROGUE, chatType: "group", senderId: CAROL });
+    expect(resolveProfile(table, config, m)).toBeNull();
+  });
+
+  it("still routes a group that a profile claims, with default_profile set", () => {
+    const config = routerConfig({ defaultProfile: "b" });
+    const table = buildRouteTable(config);
+    const m = inbound({ chatId: GROUP, chatType: "group", senderId: ALICE });
+    expect(resolveProfile(table, config, m)?.profile.name).toBe("a");
   });
 
   it("returns null for an unrouted chat when there is no default profile", () => {

@@ -5,14 +5,15 @@
  * Everything a Hermes operator can get wrong is in here: cross-talk between
  * profiles, unrouted chats, mention gating, media scoping and the tenant check.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { makeToken } from "../../src/relay/auth.js";
 import { LineAssembler } from "../../src/relay/ndjson.js";
 import { startServe, inboundFromDebugBody, type ServeHandle } from "../../src/serve.js";
+import { openStoreFromConfig } from "../../src/store/db.js";
 import { mediaIdFromUrl } from "../../src/router/router.js";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
 import type { RelayEvent } from "../../src/relay/frames.js";
@@ -20,6 +21,8 @@ import { delay, silentLogger, testConfig } from "../helpers/relay.js";
 import { ALICE, BOB, CAROL, GROUP, dmRoute, groupRoute, profileWith } from "../helpers/router.js";
 
 const OPEN_GROUP = "120363000000000002@g.us";
+/** Registered in `groups` but claimed by no profile. */
+const UNROUTED_GROUP = "120363000000000004@g.us";
 const VIP_GROUP = "120363000000000003@g.us";
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x08]);
 
@@ -453,6 +456,166 @@ describe("serve: default_profile", () => {
   });
 });
 
+describe("serve: default_profile is a DM-only fallback", () => {
+  let handle: ServeHandle;
+  let dataDir: string;
+
+  afterAll(async () => {
+    await handle?.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("drops a registered but unrouted group instead of handing it to the default", async () => {
+    dataDir = mkdtempSync(join(tmpdir(), "whatrouter-serve-group-default-"));
+    // Registered, so the registry gate admits it, and routed to nobody.
+    const config = serveConfig(dataDir, {
+      defaultProfile: "b",
+      groups: {
+        [GROUP]: { displayName: null, adminsSeen: null, listenSource: "explicit", listen: ["*"] },
+        [UNROUTED_GROUP]: {
+          displayName: null,
+          adminsSeen: null,
+          listenSource: "explicit",
+          listen: ["*"],
+        },
+      },
+    });
+    const started = await startServe({
+      config,
+      log: silentLogger(),
+      io,
+      fake: true,
+      signals: false,
+    });
+    if (!started.ok) {
+      throw new Error(`startServe failed with code ${started.code}`);
+    }
+    handle = started.handle;
+    const { port } = handle.address;
+    const profileB = config.profiles.find((p) => p.name === "b");
+    if (profileB === undefined) {
+      throw new Error("missing profile b");
+    }
+    const b = new Gateway(port, profileB);
+    await b.hello();
+
+    await fetch(`http://127.0.0.1:${port}/debug/inbound`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chatId: UNROUTED_GROUP,
+        text: "@bot what is up",
+        mentionsBot: true,
+        messageId: "g1",
+      }),
+    });
+    // Give the message every chance to arrive before concluding it did not.
+    await delay(150);
+    expect(b.events()).toHaveLength(0);
+
+    // An unrouted DM still goes to the default profile.
+    await fetch(`http://127.0.0.1:${port}/debug/inbound`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chatId: CAROL, text: "hi", messageId: "d1" }),
+    });
+    const frame = await b.waitFor(
+      (f) => (f["event"] as RelayEvent | undefined)?.message_id === "d1"
+    );
+    expect((frame["event"] as RelayEvent).source.chat_id).toBe(CAROL);
+    b.close();
+  });
+});
+
+describe("serve: startup reconciliation", () => {
+  let handle: ServeHandle;
+  let dataDir: string;
+
+  afterEach(async () => {
+    await handle?.close();
+    handle = undefined as unknown as ServeHandle;
+  });
+
+  afterAll(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("drops state for a profile the config no longer has, and keeps the real one", async () => {
+    dataDir = mkdtempSync(join(tmpdir(), "whatrouter-serve-reconcile-"));
+    const config = serveConfig(dataDir);
+    const store = openStoreFromConfig(config);
+    try {
+      // A renamed-by-hand profile: rows in all three tables, plus a file.
+      store.buffer.append("ghost", {
+        text: "queued for someone else",
+        message_type: "text",
+        message_id: "ghost-1",
+        reply_to_message_id: null,
+        source: {
+          platform: "whatsapp",
+          chat_id: "34600000001@s.whatsapp.net",
+          chat_type: "dm",
+          chat_name: "Alice",
+          user_id: "34600000001@s.whatsapp.net",
+          user_name: "Alice",
+          thread_id: null,
+          chat_topic: null,
+          message_id: "ghost-1",
+        },
+      });
+      store.buffer.setBufferedOnly("ghost", true);
+      store.policy.set("ghost", { requireAddress: false });
+      const ghostMedia = store.media.put("ghost", Buffer.from("ghost"), "text/plain");
+
+      // The same, for a profile that is still configured: must survive.
+      store.buffer.append("a", {
+        text: "still wanted",
+        message_type: "text",
+        message_id: "real-1",
+        reply_to_message_id: null,
+        source: {
+          platform: "whatsapp",
+          chat_id: "34600000001@s.whatsapp.net",
+          chat_type: "dm",
+          chat_name: "Alice",
+          user_id: "34600000001@s.whatsapp.net",
+          user_name: "Alice",
+          thread_id: null,
+          chat_topic: null,
+          message_id: "real-1",
+        },
+      });
+      store.policy.set("a", { requireAddress: true });
+      const realMedia = store.media.put("a", Buffer.from("real"), "text/plain");
+
+      const started = await startServe({
+        config,
+        log: silentLogger(),
+        io,
+        fake: true,
+        signals: false,
+      });
+      if (!started.ok) {
+        throw new Error(`startServe failed with code ${started.code}`);
+      }
+      handle = started.handle;
+
+      expect(store.buffer.count("ghost")).toBe(0);
+      expect(store.buffer.isBufferedOnly("ghost")).toBe(false);
+      expect(store.policy.get("ghost")).toBeNull();
+      expect(store.media.getMeta(ghostMedia.id)).toBeNull();
+      expect(existsSync(join(dataDir, "media", ghostMedia.id))).toBe(false);
+
+      expect(store.buffer.count("a")).toBe(1);
+      expect(store.policy.get("a")).toEqual({ requireAddress: true });
+      expect(store.media.getMeta(realMedia.id)).not.toBeNull();
+      expect(existsSync(join(dataDir, "media", realMedia.id))).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+});
+
 describe("inboundFromDebugBody", () => {
   it("fills every field from a two-key body", () => {
     const m = inboundFromDebugBody({ chatId: ALICE, text: "hola" });
@@ -470,7 +633,6 @@ describe("inboundFromDebugBody", () => {
       mentionedIds: [],
       quoted: null,
       media: null,
-      downloadFailed: false,
     });
     expect(m.messageId).toMatch(/^debug-\d+$/);
     expect(m.timestamp).toBeGreaterThan(1_700_000_000);
@@ -481,7 +643,7 @@ describe("inboundFromDebugBody", () => {
     expect(m).toMatchObject({ chatType: "group", senderId: BOB, chatName: "120363000000000001" });
   });
 
-  it("decodes media and derives the kind from the mime type", () => {
+  it("decodes media and derives the kind from the mime type", async () => {
     const m = inboundFromDebugBody({
       chatId: ALICE,
       mediaBase64: JPEG.toString("base64"),
@@ -493,11 +655,12 @@ describe("inboundFromDebugBody", () => {
     expect(m.media).toMatchObject({
       kind: "image",
       mime: "image/jpeg",
-      size: JPEG.byteLength,
+      declaredSize: JPEG.byteLength,
       filename: "cat.jpg",
       caption: "a cat",
     });
-    expect(Buffer.from(m.media?.bytes ?? new Uint8Array()).equals(JPEG)).toBe(true);
+    const bytes = await m.media?.download(JPEG.byteLength);
+    expect(Buffer.from(bytes ?? new Uint8Array()).equals(JPEG)).toBe(true);
   });
 
   it("maps a quote and mentions", () => {

@@ -459,7 +459,7 @@ Dockerfile: multi-stage on `node:24-bookworm-slim`; runtime installs `ffmpeg` (n
 notes) + `npm ci --omit=dev`; non-root `node`; `VOLUME /data`; `EXPOSE 8466`;
 `HEALTHCHECK` via `node -e "fetch('http://127.0.0.1:8466/healthz')…"`;
 `ENTRYPOINT ["node","dist/whatrouter.js"]`, `CMD ["serve"]`. Pairing in Docker:
-`docker run --rm -it -v whatrouter-data:/data whatrouter pair`.
+`docker run --rm -it -v "$PWD/data:/data" whatrouter pair`.
 
 Key interface (defined first so packages can proceed in parallel):
 

@@ -206,6 +206,33 @@ describe("upgrade auth", () => {
     expect(await client.closed()).toEqual({ code: 4401, reason: "expired" });
   });
 
+  it("closes a throttled upgrade with 1013, and lets it back in after the window", async () => {
+    // Ten bad upgrades from this ip, then a perfectly good one.
+    const bad = makeToken(WORK.gatewayId, "a-completely-different-secret-value-1234", 300);
+    for (let i = 0; i < 10; i += 1) {
+      expect(await new RelayClient(fixture.port, bad).closed()).toEqual({
+        code: 4401,
+        reason: "unauthorized",
+      });
+    }
+
+    // The rate limiter says no, but it is not a revocation: 1013, so the
+    // gateway keeps trying instead of giving up on its credentials.
+    const refused = new RelayClient(fixture.port, token(WORK));
+    expect(await refused.closed()).toEqual({ code: 1013, reason: "try again later" });
+    expect(refused.frames).toEqual([]);
+
+    // Past the 60s window the same credentials are accepted, with no relogin.
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
+    try {
+      const admitted = new RelayClient(fixture.port, token(WORK));
+      await admitted.hello();
+      expect(admitted.of("descriptor")).toHaveLength(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("closes with 4401 when no token is offered at all", async () => {
     const client = new RelayClient(fixture.port, null);
     expect(await client.closed()).toEqual({ code: 4401, reason: "unauthorized" });

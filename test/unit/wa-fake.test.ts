@@ -19,7 +19,6 @@ function inbound(overrides: Partial<InboundMessage> = {}): InboundMessage {
     mentionedIds: [],
     quoted: null,
     media: null,
-    downloadFailed: false,
     ...overrides,
   };
 }

@@ -101,6 +101,12 @@ export interface RelayServer {
   releaseProfile(profileName: string): ReleaseProfileResult | FailureResult;
   /** Permanently removes live and durable runtime state for a deleted profile. */
   removeProfile(profileName: string): void;
+  /**
+   * Drops a profile's live session with 4401 so a rotated secret takes effect.
+   * Deliberately leaves the buffer and any hold alone: the messages are still
+   * wanted, and only the credential changed.
+   */
+  revokeSession(profileName: string): boolean;
   health(): Record<string, unknown>;
 }
 
@@ -403,6 +409,14 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       guardSocketErrors(ws, "relay");
       if (!outcome.ok) {
         logAuthFailure(req, outcome.reason);
+        if (outcome.reason === "throttled") {
+          // 1013, not 4401. A throttle is our own rate limit, and a gateway
+          // reads 4401 after the handshake as revocation and stops reconnecting
+          // — so being briefly throttled would lock a healthy gateway out for
+          // good. 1013 is the code that means "come back", which is the truth.
+          ws.close(1013, "try again later");
+          return;
+        }
         const reason = outcome.reason === "expired" ? "expired" : "unauthorized";
         ws.close(4401, reason);
         return;
@@ -820,6 +834,22 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     return { success: true, profile: profile.name, wasHeld };
   }
 
+  function revokeSession(profileName: string): boolean {
+    const entry = sessions.get(profileName);
+    if (entry === undefined) {
+      log.info({ profile: profileName, wasConnected: false }, "relay session revoked");
+      return false;
+    }
+    sessions.delete(profileName);
+    clearInterval(entry.ping);
+    entry.session.close();
+    // 4401, not 1001: the gateway reads 4401 as revocation and stops
+    // reconnecting with the secret that is no longer valid.
+    closeDetached(entry.ws, 4401, "unauthorized");
+    log.info({ profile: profileName, wasConnected: true }, "relay session revoked");
+    return true;
+  }
+
   function removeProfile(profileName: string): void {
     const hold = holds.get(profileName);
     hold?.cancel();
@@ -872,6 +902,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       closeProfile,
       releaseProfile,
       removeProfile,
+      revokeSession,
       health: healthSnapshot,
       log: log.child({ route: "/mcp" }),
     });
@@ -1000,6 +1031,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     closeProfile,
     releaseProfile,
     removeProfile,
+    revokeSession,
     health: healthSnapshot,
   };
 

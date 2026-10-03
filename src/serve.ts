@@ -19,6 +19,7 @@ import { canonicalChatId } from "./router/routes.js";
 import { mediaUrl } from "./relay/media-url.js";
 import { createRelayServer, type RelayServer } from "./relay/server.js";
 import { openStoreFromConfig, type Store } from "./store/db.js";
+import { MediaTooLargeError } from "./store/media.js";
 import { createBaileysClient } from "./whatsapp/baileys-client.js";
 import { createFakeWhatsAppPort, type FakeWhatsAppPort } from "./whatsapp/fake.js";
 import { digitsOf, isGroupJid, normalizeJid } from "./whatsapp/jid.js";
@@ -86,6 +87,40 @@ function packageVersion(): string {
 }
 
 /**
+ * Drops per-profile state for names the config no longer has (D6).
+ *
+ * The buffer, media and policy tables are keyed by profile name, so a profile
+ * renamed by hand leaves its rows behind: they occupy the queue and the disk
+ * until they expire, and if the old name is ever used again the new agent
+ * inherits the old one's queued messages and media. Purging at startup means
+ * the only state a profile has is state its own name produced.
+ *
+ * Reconciling rather than trusting is deliberate: MCP deletes purge through
+ * `removeProfile`, but a hand-edited config is exactly the case that needs
+ * this, and it has no other cleanup path.
+ */
+function reconcileProfileState(store: Store, configured: readonly string[], log: Logger): void {
+  const live = new Set(configured);
+  const ghosts = new Set([
+    ...store.buffer.profiles(),
+    ...store.media.profiles(),
+    ...store.policy.profiles(),
+  ]);
+  for (const profile of ghosts) {
+    if (live.has(profile)) {
+      continue;
+    }
+    const buffered = store.buffer.purgeProfile(profile);
+    const media = store.media.purgeProfile(profile);
+    const hadPolicy = store.policy.delete(profile);
+    log.warn(
+      { profile, buffered, media, hadPolicy },
+      "dropped runtime state for a profile that is not in the config"
+    );
+  }
+}
+
+/**
  * Boots everything and returns a handle (address + `close`). Exposed separately
  * from `runServe` so tests can bind port 0 and still find out where we landed.
  */
@@ -110,6 +145,13 @@ export async function startServe(opts: ServeOptions): Promise<StartServeResult> 
   }
 
   const store = openStoreFromConfig(config);
+  // Before anything can read a profile's rows, drop the rows of profiles the
+  // config no longer has.
+  reconcileProfileState(
+    store,
+    getConfig().profiles.map((p) => p.name),
+    log
+  );
   const fakePort = fake ? createFakeWhatsAppPort() : null;
   const whatsapp: WhatsAppPort =
     fakePort ?? createBaileysClient({ config, log: log.child({ component: "whatsapp" }) });
@@ -357,8 +399,16 @@ export function inboundFromDebugBody(body: unknown): InboundMessage {
     media = {
       kind: mediaKindFor(kindRaw, mime),
       mime,
-      bytes,
-      size: bytes.byteLength,
+      declaredSize: bytes.byteLength,
+      // The debug endpoint has already decoded the attachment, so "downloading"
+      // it is handing the same array over. It still goes through the router's
+      // cap: a debug injection must not become a way around it.
+      download: async (maxBytes: number) => {
+        if (bytes.byteLength > maxBytes) {
+          throw new MediaTooLargeError(bytes.byteLength, maxBytes);
+        }
+        return bytes;
+      },
       ...(filename === undefined ? {} : { filename }),
       ...(caption === undefined ? {} : { caption }),
     };
@@ -410,6 +460,5 @@ export function inboundFromDebugBody(body: unknown): InboundMessage {
     mentionedIds,
     quoted,
     media,
-    downloadFailed: raw["downloadFailed"] === true,
   };
 }

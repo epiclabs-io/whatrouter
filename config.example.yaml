@@ -29,7 +29,8 @@ media:
   max_bytes: 26214400 # 25 MiB
   retention_seconds: 604800 # 7 days
 
-# null = drop messages from chats no route matches.
+# The profile that answers DMs no route matches. null = drop them. Group messages
+# are never answered by the default: a group must be routed to a profile.
 default_profile: null
 
 # Profiles may only act on chats routed to them unless this is true.

@@ -25,6 +25,8 @@ export interface McpToolOptions {
   closeProfile: (name: string) => CloseProfileResult | FailureResult;
   releaseProfile: (name: string) => ReleaseProfileResult | FailureResult;
   removeProfile: (name: string) => void;
+  /** Drops a profile's live session after its secret changed. */
+  revokeSession: (name: string) => boolean;
   health: () => Record<string, unknown>;
 }
 
@@ -133,11 +135,17 @@ function profileNames(doc: ConfigDocument): string[] {
   return profiles.items.map((pair) => String(pair.key));
 }
 
-async function mutate(opts: McpToolOptions, fn: (doc: ConfigDocument) => void): Promise<Config> {
+async function mutate(
+  opts: McpToolOptions,
+  fn: (doc: ConfigDocument) => void,
+  postCommit?: (config: Config) => void
+): Promise<Config> {
   if (opts.configStore === undefined) {
     throw new Error("configuration mutation is unavailable: no writable ConfigStore was provided");
   }
-  return await opts.configStore.mutate(fn);
+  return postCommit === undefined
+    ? await opts.configStore.mutate(fn)
+    : await opts.configStore.mutate(fn, postCommit);
 }
 
 function metadataResult(metadata: GroupMetadata): Record<string, unknown> {
@@ -179,6 +187,25 @@ function persistedRoutes(routes: z.infer<typeof routeSchema>[]): Record<string, 
         : { allowed_senders: persistedIdentities(route.allowed_senders) }),
     };
   });
+}
+
+/**
+ * A fresh profile secret that collides with nothing already configured.
+ *
+ * Shared by `create_profile` and `rotate_profile_secret`: a duplicate secret
+ * would make one profile able to authenticate as another, which is the one
+ * mistake here that is not self-announcing.
+ */
+function generateSecret(current: Config | undefined): string {
+  const used = new Set(current?.profiles.map((profile) => profile.secret) ?? []);
+  if (current?.management !== null && current?.management !== undefined) {
+    used.add(current.management.secret);
+  }
+  let secret = "";
+  do {
+    secret = randomBytes(32).toString("base64url");
+  } while (used.has(secret));
+  return secret;
 }
 
 export function createMcpServer(opts: McpToolOptions): McpServer {
@@ -591,13 +618,7 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
           throw new Error(`profile already exists: ${name}`);
         }
         const current = opts.configStore?.current;
-        const usedSecrets = new Set(current?.profiles.map((profile) => profile.secret) ?? []);
-        if (current?.management !== null && current?.management !== undefined) {
-          usedSecrets.add(current.management.secret);
-        }
-        do {
-          secret = randomBytes(32).toString("base64url");
-        } while (usedSecrets.has(secret));
+        secret = generateSecret(current);
         const usedGatewayIds = new Set(current?.profiles.map((profile) => profile.gatewayId) ?? []);
         do {
           gatewayId = `gw-${randomBytes(16).toString("hex")}`;
@@ -631,12 +652,122 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
     }
   );
   tool(
+    "update_profile",
+    "Change a relay profile's display name, wake URL or routes. Omitted fields are kept; " +
+      "null clears display_name or wake_url; routes replaces the whole list, so [] removes " +
+      "every route and the profile stops being addressed.",
+    {
+      name: z.string().trim().min(1),
+      display_name: z.string().nullable().optional(),
+      wake_url: z.url().nullable().optional(),
+      routes: z.array(routeSchema).optional(),
+    },
+    destructiveConfigWrite,
+    async ({ name, display_name, wake_url, routes }) => {
+      if (display_name === undefined && wake_url === undefined && routes === undefined) {
+        throw new Error("nothing to update: pass display_name, wake_url or routes");
+      }
+      const config = await mutate(opts, (doc) => {
+        if (!profileNames(doc).includes(name)) {
+          throw new Error(`unknown profile: ${name}`);
+        }
+        if (display_name !== undefined) {
+          doc.setIn(["profiles", name, "display_name"], display_name);
+        }
+        if (wake_url !== undefined) {
+          doc.setIn(["profiles", name, "wake_url"], wake_url);
+        }
+        if (routes !== undefined) {
+          // The whole list, not a merge: a route the operator forgot to repeat is
+          // one they meant to remove.
+          doc.setIn(["profiles", name, "routes"], persistedRoutes(routes));
+        }
+      });
+      const updated = config.profiles.find((profile) => profile.name === name);
+      if (updated === undefined) {
+        throw new Error(`unknown profile: ${name}`);
+      }
+      return warningReply(
+        {
+          name,
+          displayName: updated.displayName,
+          wakeUrl: updated.wakeUrl,
+          routes: updated.routes,
+        },
+        `Updated profile ${name}`,
+        opts.configStore?.warnings ?? []
+      );
+    }
+  );
+  tool(
+    "rotate_profile_secret",
+    "Replace a relay profile's secret and return the new credentials once. The profile's live " +
+      "session is closed so the old secret stops working immediately; it must be restarted with " +
+      "the new one. Profiles whose secret comes from secret_file or an environment variable must " +
+      "be rotated where they are read.",
+    { name: z.string().trim().min(1) },
+    destructiveConfigWrite,
+    async ({ name }) => {
+      let secret = "";
+      const config = await mutate(
+        opts,
+        (doc) => {
+          if (!profileNames(doc).includes(name)) {
+            throw new Error(`unknown profile: ${name}`);
+          }
+          // Read plain values, not YAML nodes. The document is not interpolated,
+          // so `${...}` is still literal here and tells us the value on disk is
+          // not the value in use.
+          if (doc.getIn(["profiles", name, "secret_file"]) !== undefined) {
+            throw new Error(`profile "${name}" reads its secret from secret_file; rotate it there`);
+          }
+          const existing = doc.getIn(["profiles", name, "secret"]);
+          if (typeof existing === "string" && existing.includes("${")) {
+            throw new Error(
+              `profile "${name}" reads its secret from an environment variable; rotate it there`
+            );
+          }
+          secret = generateSecret(opts.configStore?.current);
+          doc.setIn(["profiles", name, "secret"], secret);
+        },
+        () => {
+          // After the commit: the old secret is already invalid, so anything still
+          // connected has to be told rather than left to fail on its next action.
+          opts.revokeSession(name);
+        }
+      );
+      const rotated = config.profiles.find((profile) => profile.name === name);
+      if (rotated === undefined) {
+        throw new Error(`unknown profile: ${name}`);
+      }
+      const url = relayUrl(config);
+      return warningReply(
+        {
+          name,
+          gatewayId: rotated.gatewayId,
+          secret,
+          relayUrl: url,
+          env: [
+            `GATEWAY_RELAY_URL=${url}`,
+            `GATEWAY_RELAY_ID=${rotated.gatewayId}`,
+            `GATEWAY_RELAY_SECRET=${secret}`,
+            "GATEWAY_RELAY_PLATFORMS=whatsapp",
+          ],
+        },
+        `Rotated the secret for profile ${name}; credentials are shown once and the live ` +
+          `session was closed, so restart it with the new secret`,
+        opts.configStore?.warnings ?? []
+      );
+    }
+  );
+  tool(
     "delete_profile",
-    "Delete a relay profile after closing its live session.",
+    "Delete a relay profile after closing its live session. If the deleted profile was the " +
+      "default_profile, the default is cleared rather than moved to another profile, so " +
+      "unrouted DMs are dropped until a default is set again.",
     { name: z.string().min(1) },
     destructiveConfigWrite,
     async ({ name }) => {
-      let fallback: string | null = null;
       let wasDefault = false;
       const config = await opts.configStore?.mutate(
         (doc) => {
@@ -647,11 +778,13 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
           if (names.length === 1) {
             throw new Error("cannot delete the last profile");
           }
-          fallback = names.find((candidate) => candidate !== name) ?? null;
           wasDefault = doc.get("default_profile") === name;
           doc.deleteIn(["profiles", name]);
           if (wasDefault) {
-            doc.set("default_profile", fallback);
+            // Cleared, not handed to whoever happens to be left: promoting an
+            // arbitrary profile would silently start delivering another agent's
+            // DMs to the survivor (D4).
+            doc.set("default_profile", null);
           }
         },
         () => opts.removeProfile(name)
@@ -661,14 +794,19 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
           "configuration mutation is unavailable: no writable ConfigStore was provided"
         );
       }
-      return reply(
-        {
-          name,
-          deleted: true,
-          defaultProfile: config.defaultProfile,
-        },
-        `Deleted profile ${name}`
-      );
+      const result = {
+        name,
+        deleted: true,
+        defaultProfile: config.defaultProfile,
+      };
+      return wasDefault
+        ? warningReply(result, `Deleted profile ${name}`, [
+            {
+              path: "default_profile",
+              message: "default_profile cleared; unrouted DMs are now dropped",
+            },
+          ])
+        : reply(result, `Deleted profile ${name}`);
     }
   );
   tool(

@@ -42,6 +42,8 @@ export interface MediaStore {
   /** Deletes all metadata and files owned by one profile. */
   purgeProfile(profile: string): number;
   purgeOlderThan(retentionSeconds: number, nowSeconds?: number): number;
+  /** Every profile that still owns media, deduplicated. */
+  profiles(): string[];
 }
 
 export class MediaTooLargeError extends Error {
@@ -85,6 +87,7 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
   );
   const selectOne = db.prepare("SELECT * FROM media WHERE id = ?");
   const deleteOne = db.prepare("DELETE FROM media WHERE id = ?");
+  const distinctProfiles = db.prepare("SELECT DISTINCT profile FROM media");
   const selectExpired = db.prepare("SELECT id FROM media WHERE created_at < ?");
   const selectProfile = db.prepare("SELECT id FROM media WHERE profile = ?");
 
@@ -196,6 +199,12 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
         unlink(id);
       }
       return removed;
+    },
+
+    profiles() {
+      return (distinctProfiles.all() as Array<{ profile?: string }>)
+        .map((row) => row.profile)
+        .filter((p): p is string => typeof p === "string");
     },
 
     purgeOlderThan(retentionSeconds, nowSeconds = Math.floor(Date.now() / 1000)) {
