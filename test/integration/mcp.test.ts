@@ -7,14 +7,24 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { parse } from "yaml";
 import { ConfigStore } from "../../src/config/store.js";
+import { makeToken } from "../../src/relay/auth.js";
 import { startServe, type ServeHandle } from "../../src/serve.js";
 import { silentLogger, testConfig } from "../helpers/relay.js";
 
 const MANAGEMENT_SECRET = "mcp-management-secret-0123456789abcdef";
 const PROFILE_SECRET = "profile-secret-0123456789abcdef012345";
 const io = { out: (): void => undefined, err: (): void => undefined };
+
+/** The close code a server sends, resolving once the socket is gone. */
+function closeCodeOf(ws: WebSocket): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    ws.once("close", (code) => resolve(code));
+    ws.once("error", reject);
+  });
+}
 
 async function unusedPort(): Promise<number> {
   const server = createServer();
@@ -152,6 +162,7 @@ profiles:
         "list_group_members",
         "list_groups",
         "list_profiles",
+        "rotate_profile_secret",
         "modify_group_members",
         "register_group",
         "release_profile",
@@ -160,6 +171,7 @@ profiles:
         "set_listen_list",
         "update_group",
         "update_group_settings",
+        "update_profile",
       ].sort()
     );
     expect(listed.tools.every((tool) => tool.outputSchema !== undefined)).toBe(true);
@@ -511,6 +523,203 @@ profiles:
     expect(result.result).toEqual({ name: "delta", deleted: true, defaultProfile: "charlie" });
     expect(result.result.warnings).toBeUndefined();
     expect(configStore.get().defaultProfile).toBe("charlie");
+  });
+
+  it("updates one field at a time and leaves the rest alone", async () => {
+    for (const name of ["echo", "foxtrot"]) {
+      expect(
+        (await client.callTool({ name: "create_profile", arguments: { name } })).isError
+      ).not.toBe(true);
+    }
+    await configStore.mutate((doc) => {
+      doc.setIn(["profiles", "echo", "display_name"], "Echo");
+      doc.setIn(["profiles", "echo", "wake_url"], "https://wake.example.com/echo");
+      doc.setIn(["profiles", "echo", "routes"], [{ dm: "34600000001@s.whatsapp.net" }]);
+    });
+
+    const renamed = await client.callTool({
+      name: "update_profile",
+      arguments: { name: "echo", display_name: "Echo Two" },
+    });
+    expect(renamed.isError).not.toBe(true);
+    let profile = configStore.get().profiles.find((p) => p.name === "echo");
+    expect(profile?.displayName).toBe("Echo Two");
+    // Everything not named was kept.
+    expect(profile?.wakeUrl).toBe("https://wake.example.com/echo");
+    expect(profile?.routes).toHaveLength(1);
+
+    const cleared = await client.callTool({
+      name: "update_profile",
+      arguments: { name: "echo", wake_url: null },
+    });
+    expect(cleared.isError).not.toBe(true);
+    profile = configStore.get().profiles.find((p) => p.name === "echo");
+    expect(profile?.wakeUrl).toBeNull();
+    expect(profile?.displayName).toBe("Echo Two");
+
+    // routes replaces the whole list; [] removes every route.
+    const rerouted = await client.callTool({
+      name: "update_profile",
+      arguments: {
+        name: "echo",
+        routes: [{ dm: "34600000002@s.whatsapp.net" }, { group: "120363000000000007@g.us" }],
+      },
+    });
+    expect(rerouted.isError).not.toBe(true);
+    profile = configStore.get().profiles.find((p) => p.name === "echo");
+    expect(profile?.routes.map((r) => r.id)).toEqual([
+      "34600000002@s.whatsapp.net",
+      "120363000000000007@g.us",
+    ]);
+
+    const emptied = await client.callTool({
+      name: "update_profile",
+      arguments: { name: "echo", routes: [] },
+    });
+    expect(emptied.isError).not.toBe(true);
+    profile = configStore.get().profiles.find((p) => p.name === "echo");
+    expect(profile?.routes).toEqual([]);
+  });
+
+  it("refuses an empty update, an unknown profile and a colliding route", async () => {
+    const empty = await client.callTool({
+      name: "update_profile",
+      arguments: { name: "work" },
+    });
+    expect(empty.isError).toBe(true);
+    expect(empty.content).toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining("nothing to update") })
+    );
+
+    const unknown = await client.callTool({
+      name: "update_profile",
+      arguments: { name: "nobody", display_name: "x" },
+    });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.content).toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining("unknown profile: nobody") })
+    );
+
+    // "work" already routes 34600000001, so a second profile cannot claim it.
+    const collides = await client.callTool({
+      name: "update_profile",
+      arguments: {
+        name: "golf",
+        routes: [{ dm: "34600000001@s.whatsapp.net" }],
+      },
+    });
+    expect(collides.isError).toBe(true);
+    expect(configStore.get().profiles.find((p) => p.name === "golf")).toBeUndefined();
+  });
+
+  it("rotates an inline secret, reloads the config and refuses the old token", async () => {
+    const port = handle.address.port;
+    const before = configStore.get().profiles.find((p) => p.name === "work");
+    if (before === undefined) {
+      throw new Error("missing work profile");
+    }
+    const oldSecret = before.secret;
+
+    // The live session is closed, so the old credentials stop working at once.
+    const live = new WebSocket(`ws://127.0.0.1:${port}/relay`, {
+      headers: { authorization: `Bearer ${makeToken(before.gatewayId, oldSecret, 300)}` },
+    });
+    const closed = new Promise<number>((resolve) => {
+      live.once("close", (code) => resolve(code));
+    });
+    await new Promise<void>((resolve, reject) => {
+      live.once("open", () => resolve());
+      live.once("error", reject);
+    });
+    expect(handle.relay.isConnected("work")).toBe(true);
+
+    const rotated = await client.callTool({
+      name: "rotate_profile_secret",
+      arguments: { name: "work" },
+    });
+    expect(rotated.isError).not.toBe(true);
+    const result = rotated.structuredContent as {
+      result: { name: string; gatewayId: string; secret: string; env: string[] };
+    };
+    expect(result.result.name).toBe("work");
+    expect(result.result.gatewayId).toBe(before.gatewayId);
+    expect(result.result.secret).not.toBe(oldSecret);
+    expect(result.result.env).toContain(`GATEWAY_RELAY_SECRET=${result.result.secret}`);
+    expect(
+      (rotated.content as Array<{ type: string; text: string }>).some((block) =>
+        block.text.includes("shown once")
+      )
+    ).toBe(true);
+
+    // The connected gateway was told, rather than left to fail later.
+    expect(await closed).toBe(4401);
+    expect(handle.relay.isConnected("work")).toBe(false);
+
+    // The config really changed, so the old token is refused and the new one works.
+    expect(configStore.get().profiles.find((p) => p.name === "work")?.secret).toBe(
+      result.result.secret
+    );
+    const withOld = new WebSocket(`ws://127.0.0.1:${port}/relay`, {
+      headers: { authorization: `Bearer ${makeToken(before.gatewayId, oldSecret, 300)}` },
+    });
+    expect(await closeCodeOf(withOld)).toBe(4401);
+
+    const withNew = new WebSocket(`ws://127.0.0.1:${port}/relay`, {
+      headers: {
+        authorization: `Bearer ${makeToken(before.gatewayId, result.result.secret, 300)}`,
+      },
+    });
+    await new Promise<void>((resolve, reject) => {
+      withNew.once("open", () => resolve());
+      withNew.once("error", reject);
+    });
+    withNew.close();
+  });
+
+  it("refuses to rotate a secret the config does not own", async () => {
+    // Both profiles load cleanly, so the refusal comes from the tool and not
+    // from validation: what is on disk is simply not where the live secret
+    // comes from, and writing over it would not change the running config.
+    const secretPath = join(directory, "from-file.secret");
+    await writeFile(secretPath, "file-owned-secret-0123456789abcdef\n");
+    process.env["GATEWAY_SECRET_FROM_ENV"] = "env-owned-secret-0123456789abcdef";
+    try {
+      await configStore.mutate((doc) => {
+        doc.setIn(["profiles", "from-file", "gateway_id"], "gw-from-file");
+        doc.setIn(["profiles", "from-file", "routes"], []);
+        doc.deleteIn(["profiles", "from-file", "secret"]);
+        doc.setIn(["profiles", "from-file", "secret_file"], secretPath);
+        doc.setIn(["profiles", "from-env", "gateway_id"], "gw-from-env");
+        doc.setIn(["profiles", "from-env", "routes"], []);
+        doc.setIn(["profiles", "from-env", "secret"], "${GATEWAY_SECRET_FROM_ENV}");
+      });
+      const before = await readFile(configPath, "utf8");
+
+      for (const [name, expected] of [
+        ["from-file", "secret_file"],
+        ["from-env", "environment variable"],
+      ] as const) {
+        const refused = await client.callTool({
+          name: "rotate_profile_secret",
+          arguments: { name },
+        });
+        expect(refused.isError, name).toBe(true);
+        expect((refused.content as Array<{ type: string; text: string }>)[0]?.text, name).toContain(
+          expected
+        );
+      }
+      // The file was left exactly as it was.
+      expect(await readFile(configPath, "utf8")).toBe(before);
+
+      // Remove the two fixtures: a `${...}` secret that no longer resolves
+      // would fail validation for every later mutation in this file.
+      await configStore.mutate((doc) => {
+        doc.deleteIn(["profiles", "from-file"]);
+        doc.deleteIn(["profiles", "from-env"]);
+      });
+    } finally {
+      delete process.env["GATEWAY_SECRET_FROM_ENV"];
+    }
   });
 
   it("purges profile runtime state before allowing delete and same-name recreation", async () => {
