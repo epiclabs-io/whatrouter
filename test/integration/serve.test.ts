@@ -470,7 +470,6 @@ describe("inboundFromDebugBody", () => {
       mentionedIds: [],
       quoted: null,
       media: null,
-      downloadFailed: false,
     });
     expect(m.messageId).toMatch(/^debug-\d+$/);
     expect(m.timestamp).toBeGreaterThan(1_700_000_000);
@@ -481,7 +480,7 @@ describe("inboundFromDebugBody", () => {
     expect(m).toMatchObject({ chatType: "group", senderId: BOB, chatName: "120363000000000001" });
   });
 
-  it("decodes media and derives the kind from the mime type", () => {
+  it("decodes media and derives the kind from the mime type", async () => {
     const m = inboundFromDebugBody({
       chatId: ALICE,
       mediaBase64: JPEG.toString("base64"),
@@ -493,11 +492,12 @@ describe("inboundFromDebugBody", () => {
     expect(m.media).toMatchObject({
       kind: "image",
       mime: "image/jpeg",
-      size: JPEG.byteLength,
+      declaredSize: JPEG.byteLength,
       filename: "cat.jpg",
       caption: "a cat",
     });
-    expect(Buffer.from(m.media?.bytes ?? new Uint8Array()).equals(JPEG)).toBe(true);
+    const bytes = await m.media?.download(JPEG.byteLength);
+    expect(Buffer.from(bytes ?? new Uint8Array()).equals(JPEG)).toBe(true);
   });
 
   it("maps a quote and mentions", () => {

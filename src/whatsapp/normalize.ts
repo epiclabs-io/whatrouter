@@ -2,8 +2,18 @@
  * Baileys `WAMessage` -> `InboundMessage`.
  *
  * Everything platform-shaped happens here: envelope unwrapping, LID/phone
- * canonicalization, media download, quote and mention extraction. The router and
- * relay layers never see a Baileys type.
+ * canonicalization, quote and mention extraction. The router and relay layers
+ * never see a Baileys type.
+ *
+ * Two things are deliberately *not* done here, because both cost a WhatsApp
+ * request and neither is always wanted:
+ *
+ * - media is not downloaded. The attachment is described, plus a `download` the
+ *   router calls later; whether it is worth fetching depends on gates that only
+ *   run after normalization.
+ * - a group's subject is not looked up. A rogue group's messages are dropped by
+ *   the router's registry gate, and fetching a subject for one of those is a
+ *   request spent to learn something already known.
  *
  * `normalizeInbound` never throws: a message we cannot fully understand is either
  * dropped (returns null) or delivered with a degraded body.
@@ -31,10 +41,11 @@ export interface NormalizeContext {
   botIds: string[];
   /** Last-resort LID -> phone resolution (`signalRepository.lidMapping`). */
   resolvePn?: ((lid: string) => Promise<string | null>) | undefined;
-  /** Group subject lookup, usually a cached `groupMetadata` call. */
-  groupSubject?: ((jid: string) => Promise<string | null>) | undefined;
-  /** Media fetcher; omitted means "do not download" (media stays null). */
-  download?: ((msg: WAMessage) => Promise<Uint8Array>) | undefined;
+  /**
+   * Media fetcher, already capped at `maxBytes` by the caller. Omitted means no
+   * media support is wired up, and media stays null.
+   */
+  download?: ((msg: WAMessage, maxBytes: number) => Promise<Uint8Array>) | undefined;
   log: Logger;
 }
 
@@ -71,8 +82,12 @@ const DEFAULT_MIME: Record<MediaKind, string> = {
   sticker: "image/webp",
 };
 
-/** `messageTimestamp` is a number, a Long, or a stringified Long depending on the path. */
-export function toUnixSeconds(value: unknown): number {
+/**
+ * WhatsApp protos carry numbers as `number`, decimal `string`, or Long, so
+ * `fileLength` needs all three. Returns null when there is nothing usable, which
+ * lets a caller decide what "missing" means rather than guessing a value.
+ */
+export function toNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.floor(value);
   }
@@ -94,7 +109,12 @@ export function toUnixSeconds(value: unknown): number {
       return (long.high ?? 0) * 4294967296 + (long.low >>> 0);
     }
   }
-  return Math.floor(Date.now() / 1000);
+  return null;
+}
+
+/** Unix seconds; an absent or nonsensical timestamp means "now". */
+export function toUnixSeconds(value: unknown): number {
+  return toNumber(value) ?? Math.floor(Date.now() / 1000);
 }
 
 function node(content: Content, type: ContentType): Record<string, unknown> | undefined {
@@ -303,18 +323,9 @@ export async function normalizeInbound(
   const chatId = isGroup ? normalizeJid(remoteJid) : senderId;
   const senderName = msg.pushName ?? digitsOf(senderId);
 
-  let chatName = senderName;
-  if (isGroup) {
-    let subject: string | null = null;
-    if (ctx.groupSubject !== undefined) {
-      try {
-        subject = await ctx.groupSubject(chatId);
-      } catch (err) {
-        ctx.log.debug({ err, chatId }, "group subject lookup failed");
-      }
-    }
-    chatName = subject === null || subject === "" ? digitsOf(chatId) : subject;
-  }
+  // A group's subject is a WhatsApp request, so it is not fetched here: the router
+  // asks for it once its registry gate has passed (D8).
+  const chatName = isGroup ? "" : senderName;
 
   const contextInfo = contextInfoOf(content, type);
   const mentionedIds = (contextInfo?.mentionedJid ?? [])
@@ -323,36 +334,30 @@ export async function normalizeInbound(
   const mentionsBot = mentionedIds.some((id) => ctx.botIds.some((bot) => sameUser(id, bot)));
 
   const kind = kindOf(type, inner);
-  let text = extractText(content);
+  const text = extractText(content);
   let media: InboundMedia | null = null;
-  let downloadFailed = false;
 
   const mediaKind: MediaKind | undefined =
     kind === "voice" ? "voice" : MEDIA_KIND_BY_TYPE[type as string];
 
-  if (mediaKind !== undefined && ctx.download !== undefined) {
-    try {
-      const bytes = await ctx.download(msg);
-      const caption = str(inner?.["caption"]);
-      const filename = str(inner?.["fileName"]);
-      media = {
-        kind: mediaKind,
-        mime: str(inner?.["mimetype"]) || DEFAULT_MIME[mediaKind],
-        bytes,
-        size: bytes.byteLength,
-        ...(filename === "" ? {} : { filename }),
-        ...(caption === "" ? {} : { caption }),
-      };
-    } catch (err) {
-      ctx.log.warn({ err, messageId, chatId }, "media download failed; delivering without it");
-      downloadFailed = true;
-      const note = `[${kind} could not be downloaded]`;
-      text = text === "" ? note : `${text}\n${note}`;
-    }
+  const download = ctx.download;
+  if (mediaKind !== undefined && download !== undefined) {
+    const caption = str(inner?.["caption"]);
+    const filename = str(inner?.["fileName"]);
+    media = {
+      kind: mediaKind,
+      mime: str(inner?.["mimetype"]) || DEFAULT_MIME[mediaKind],
+      // The proto's own size, so the router can refuse an oversized attachment
+      // without spending a download to find out how big it really is.
+      declaredSize: toNumber(inner?.["fileLength"]),
+      download: (maxBytes: number) => download(msg, maxBytes),
+      ...(filename === "" ? {} : { filename }),
+      ...(caption === "" ? {} : { caption }),
+    };
   }
 
   // Nothing a gateway could act on: an unsupported card with no body and no media.
-  if (kind === "other" && text === "" && media === null && !downloadFailed) {
+  if (kind === "other" && text === "" && media === null) {
     ctx.log.debug({ type, chatId }, "dropping message with no usable payload");
     return null;
   }
@@ -373,6 +378,5 @@ export async function normalizeInbound(
     mentionedIds,
     quoted: quotedFrom(contextInfo, ctx.botIds),
     media,
-    downloadFailed,
   };
 }

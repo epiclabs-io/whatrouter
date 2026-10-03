@@ -25,13 +25,18 @@ import type { Config, ProfileConfig } from "../config/schema.js";
 import type { OutboundAction, OutboundResult, RelayEvent } from "../relay/frames.js";
 import type { DeliveryOutcome } from "../relay/server.js";
 import type { Store } from "../store/db.js";
+import { MediaTooLargeError } from "../store/media.js";
 import type { Logger } from "../util/log.js";
 import {
   fetchPublic,
   type PublicFetchOptions,
   type PublicFetchResult,
 } from "../util/public-fetch.js";
+import { digitsOf } from "../whatsapp/jid.js";
 import type { InboundMessage, OutboundMedia, WhatsAppPort } from "../whatsapp/port.js";
+
+/** How long a group's WhatsApp subject stays good enough to reuse. */
+const GROUP_NAME_TTL_MS = 5 * 60_000;
 
 /** The slice of the relay server the router needs (kept narrow for tests and wiring). */
 export interface RelayDeliverer {
@@ -114,28 +119,124 @@ export function createRouter(opts: RouterOptions): Router {
 
   // ------------------------------------------------------------------ inbound
 
-  /** Re-hosts the attachment; media we cannot store never drops the message. */
-  function storeMedia(profileName: string, m: InboundMessage): EventMedia | null {
+  /** Group subject by id, with the time we asked for it. */
+  const groupNames = new Map<string, { subject: string; at: number }>();
+
+  /** The attachment re-hosted, plus the body text after any media note. */
+  interface InboundBody {
+    media: EventMedia | null;
+    text: string;
+  }
+
+  /**
+   * Downloads and re-hosts the attachment.
+   *
+   * This is the only place media is fetched, which is what makes the cap
+   * enforceable: the limit comes from the store that has to hold the bytes, and
+   * a message whose attachment is too big, unreachable or unstorable still gets
+   * delivered, with a note saying what happened (D2, D8).
+   */
+  async function storeMedia(profileName: string, m: InboundMessage): Promise<InboundBody> {
     const media = m.media;
     if (media === null) {
-      return null;
+      return { media: null, text: m.text };
     }
+    const note = (why: string): InboundBody => {
+      const line = `[${media.kind} ${why}]`;
+      return { media: null, text: m.text === "" ? line : `${m.text}\n${line}` };
+    };
+    const maxBytes = store.media.maxBytes;
+
+    // The proto already told us the size, so an oversized attachment is refused
+    // without spending a download to confirm it.
+    if (media.declaredSize !== null && media.declaredSize > maxBytes) {
+      log.info(
+        { profile: profileName, chatId: m.chatId, size: media.declaredSize, limit: maxBytes },
+        "inbound media is over the cap; delivering the message without it"
+      );
+      return note("too large to forward");
+    }
+
+    let bytes: Uint8Array;
     try {
-      const { id } = store.media.put(profileName, media.bytes, media.mime, media.filename ?? null);
+      bytes = await media.download(maxBytes);
+    } catch (err: unknown) {
+      if (err instanceof MediaTooLargeError) {
+        log.info(
+          { profile: profileName, chatId: m.chatId, size: err.size, limit: err.limit },
+          "inbound media is over the cap; delivering the message without it"
+        );
+        return note("too large to forward");
+      }
+      log.warn(
+        { profile: profileName, chatId: m.chatId, err: errorMessage(err) },
+        "could not download inbound media; delivering the message without it"
+      );
+      return note("could not be downloaded");
+    }
+
+    try {
+      const { id } = store.media.put(profileName, bytes, media.mime, media.filename ?? null);
       return {
-        url: mediaUrlFor(id),
-        kind: media.kind,
-        mime: media.mime,
-        size: media.size > 0 ? media.size : media.bytes.byteLength,
-        filename: media.filename,
-        caption: media.caption,
+        media: {
+          url: mediaUrlFor(id),
+          kind: media.kind,
+          mime: media.mime,
+          size: bytes.byteLength,
+          filename: media.filename,
+          caption: media.caption,
+        },
+        text: m.text,
       };
     } catch (err: unknown) {
       log.warn(
         { profile: profileName, chatId: m.chatId, err: errorMessage(err) },
         "could not store inbound media; delivering the message without it"
       );
-      return null;
+      return { media: null, text: m.text };
+    }
+  }
+
+  /**
+   * A group's name, spent as late as the gates allow.
+   *
+   * A configured `display_name` is free, and the adapter deliberately left
+   * `chatName` empty for groups, so the registry gate has already dropped every
+   * group whose subject we would otherwise have gone and asked WhatsApp for. The
+   * digits are the fallback: a name is a nicety, not a reason to lose a message.
+   *
+   * Subjects are cached because a busy group asks the same question on every
+   * message, and a name that is five minutes stale is not worth a request.
+   */
+  async function resolveChatName(m: InboundMessage, config: Config): Promise<string> {
+    if (m.chatType !== "group") {
+      return m.chatName;
+    }
+    const groupId = canonicalChatId(m.chatId);
+    const configured = config.groups[groupId as keyof typeof config.groups]?.displayName;
+    if (configured !== undefined && configured !== null && configured !== "") {
+      return configured;
+    }
+    if (m.chatName !== "") {
+      return m.chatName;
+    }
+    const digits = digitsOf(groupId);
+    const cached = groupNames.get(groupId);
+    if (cached !== undefined && Date.now() - cached.at < GROUP_NAME_TTL_MS) {
+      return cached.subject === "" ? digits : cached.subject;
+    }
+    try {
+      const subject = (await whatsapp.getGroupMetadata(groupId)).subject.trim();
+      groupNames.set(groupId, { subject, at: Date.now() });
+      return subject === "" ? digits : subject;
+    } catch (err: unknown) {
+      // Deliberately not cached: a failed lookup is usually transient, and a
+      // group that just came back deserves to be asked about again.
+      log.debug(
+        { chatId: groupId, err: errorMessage(err) },
+        "group subject lookup failed; using the group id"
+      );
+      return digits;
     }
   }
 
@@ -203,8 +304,11 @@ export function createRouter(opts: RouterOptions): Router {
         return;
       }
 
-      const media = storeMedia(profile.name, m);
-      const event = toRelayEvent(m, media);
+      const [chatName, body] = await Promise.all([
+        resolveChatName(m, currentConfig),
+        storeMedia(profile.name, m),
+      ]);
+      const event = toRelayEvent({ ...m, chatName, text: body.text }, body.media);
       const outcome = relay.deliver(profile.name, event);
       // Remember it so a reply to a chat we matched by alt id or `default_profile`
       // still passes the outbound tenant check.
@@ -215,7 +319,7 @@ export function createRouter(opts: RouterOptions): Router {
           chatId: m.chatId,
           messageId: m.messageId,
           messageType: event.message_type,
-          media: media === null ? 0 : 1,
+          media: body.media === null ? 0 : 1,
           outcome,
         },
         "inbound delivered to the relay"

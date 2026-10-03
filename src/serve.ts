@@ -19,6 +19,7 @@ import { canonicalChatId } from "./router/routes.js";
 import { mediaUrl } from "./relay/media-url.js";
 import { createRelayServer, type RelayServer } from "./relay/server.js";
 import { openStoreFromConfig, type Store } from "./store/db.js";
+import { MediaTooLargeError } from "./store/media.js";
 import { createBaileysClient } from "./whatsapp/baileys-client.js";
 import { createFakeWhatsAppPort, type FakeWhatsAppPort } from "./whatsapp/fake.js";
 import { digitsOf, isGroupJid, normalizeJid } from "./whatsapp/jid.js";
@@ -357,8 +358,16 @@ export function inboundFromDebugBody(body: unknown): InboundMessage {
     media = {
       kind: mediaKindFor(kindRaw, mime),
       mime,
-      bytes,
-      size: bytes.byteLength,
+      declaredSize: bytes.byteLength,
+      // The debug endpoint has already decoded the attachment, so "downloading"
+      // it is handing the same array over. It still goes through the router's
+      // cap: a debug injection must not become a way around it.
+      download: async (maxBytes: number) => {
+        if (bytes.byteLength > maxBytes) {
+          throw new MediaTooLargeError(bytes.byteLength, maxBytes);
+        }
+        return bytes;
+      },
       ...(filename === undefined ? {} : { filename }),
       ...(caption === undefined ? {} : { caption }),
     };
@@ -410,6 +419,5 @@ export function inboundFromDebugBody(body: unknown): InboundMessage {
     mentionedIds,
     quoted,
     media,
-    downloadFailed: raw["downloadFailed"] === true,
   };
 }

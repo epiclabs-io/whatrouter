@@ -30,6 +30,7 @@ import {
 } from "@whiskeysockets/baileys";
 import type { Config } from "../config/schema.js";
 import type { Logger } from "../util/log.js";
+import { readCapped } from "../util/stream.js";
 import { WHATSAPP_MAX_MESSAGE_CHARS, chunkText } from "./chunk.js";
 import { markdownToWhatsApp } from "./format.js";
 import { canonicalJid, digitsOf, isGroupJid, normalizeJid } from "./jid.js";
@@ -323,17 +324,21 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
 
   // ------------------------------------------------------------------- inbound
 
-  async function download(msg: WAMessage): Promise<Uint8Array> {
+  async function download(msg: WAMessage, maxBytes: number): Promise<Uint8Array> {
     const current = requireSocket();
-    return await downloadMediaMessage(
+    // "stream", not "buffer": Baileys would otherwise concatenate the whole
+    // attachment into memory before we ever see how large it turned out to be,
+    // which is the allocation the cap exists to prevent.
+    const stream = await downloadMediaMessage(
       msg,
-      "buffer",
+      "stream",
       {},
       {
         logger: waLogger,
         reuploadRequest: (m: WAMessage) => current.updateMediaMessage(m),
       }
     );
+    return await readCapped(stream, maxBytes);
   }
 
   async function resolvePn(lid: string): Promise<string | null> {
@@ -353,7 +358,6 @@ export function createBaileysClient(opts: BaileysClientOptions): BaileysClient {
         const m = await normalizeInbound(msg, {
           botIds,
           resolvePn,
-          groupSubject,
           download,
           log,
         });
