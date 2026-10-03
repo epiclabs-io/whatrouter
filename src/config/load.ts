@@ -482,8 +482,4 @@ export async function loadConfigFile(path: string): Promise<{ config: Config; wa
   return { config: result.config, warnings: result.warnings };
 }
 
-export async function loadConfig(path: string): Promise<Config> {
-  return (await loadConfigFile(path)).config;
-}
-
 export { ConfigError } from "./schema.js";

@@ -2,34 +2,22 @@
 import pino from "pino";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
 import type { Logger } from "../../src/util/log.js";
-import { buildDescriptor } from "../../src/relay/descriptor.js";
-import type { CapabilityDescriptor, RelayEvent } from "../../src/relay/frames.js";
+import { sign } from "../../src/relay/auth.js";
+import type { RelayEvent } from "../../src/relay/frames.js";
 
 /**
- * The boot snapshot, as `serve.ts` captures it.
- *
- * Tests that build a relay server directly have to pass the settings that
- * production reads once at boot; this keeps them saying which config they mean
- * instead of restating the capture.
+ * Mints a relay token the way the gateway does. Production only ever verifies
+ * tokens, so this lives with the tests that need to be a gateway.
  */
-export function bootSettings(config: Config): {
-  listen: { host: string; port: number };
-  managementSecret: string | undefined;
-  maxMediaBytes: number;
-  wakeCooldownSeconds: number;
-  bufferMaxAgeSeconds: number;
-  mediaRetentionSeconds: number;
-  descriptor: CapabilityDescriptor;
-} {
-  return {
-    listen: config.listen,
-    managementSecret: config.management?.secret,
-    maxMediaBytes: config.media.maxBytes,
-    wakeCooldownSeconds: config.buffer.wakeCooldownSeconds,
-    bufferMaxAgeSeconds: config.buffer.maxAgeSeconds,
-    mediaRetentionSeconds: config.media.retentionSeconds,
-    descriptor: buildDescriptor(config),
-  };
+export function makeToken(
+  payload: string,
+  secret: string,
+  ttlSeconds: number,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): string {
+  const exp = ttlSeconds > 0 ? Math.floor(nowSeconds) + Math.floor(ttlSeconds) : 0;
+  const signed = `${payload}:${exp}`;
+  return Buffer.from(`${signed}:${sign(signed, secret)}`, "utf8").toString("base64url");
 }
 
 export function silentLogger(): Logger {

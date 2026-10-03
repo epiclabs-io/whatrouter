@@ -6,13 +6,12 @@ import { parseArgs } from "node:util";
 import { loadConfigFile } from "./config/load.js";
 import { ConfigStore } from "./config/store.js";
 import { ConfigError, relayUrl, type Config, type Issue } from "./config/schema.js";
+import { EXIT_CONFIG, EXIT_OK } from "./exit-codes.js";
 import { runServe } from "./serve.js";
 import { createLogger } from "./util/log.js";
 import { runPair } from "./whatsapp/pair.js";
 
-export const EXIT_OK = 0;
-export const EXIT_FAILURE = 1;
-export const EXIT_CONFIG = 2;
+export { EXIT_CONFIG, EXIT_FAILURE, EXIT_OK } from "./exit-codes.js";
 
 export interface CliIo {
   out(line: string): void;

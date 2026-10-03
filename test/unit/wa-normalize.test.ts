@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WAMessage } from "@whiskeysockets/baileys";
-import { normalizeInbound, toUnixSeconds } from "../../src/whatsapp/normalize.js";
-import { BOT_IDS, BOT_LID, BOT_PN, fixture, silentLog } from "../helpers/wa.js";
+import { normalizeInbound } from "../../src/whatsapp/normalize.js";
+import { BOT_IDS, BOT_PN, fixture, silentLog } from "../helpers/wa.js";
 
 const log = silentLog();
 
@@ -48,9 +48,7 @@ describe("normalizeInbound: direct messages", () => {
       senderName: "Alice",
       text: "Hello there",
       kind: "text",
-      timestamp: 1758000000,
       mentionsBot: false,
-      mentionedIds: [],
       quoted: null,
       media: null,
     });
@@ -65,7 +63,6 @@ describe("normalizeInbound: direct messages", () => {
   it("extracts quote, mention and bot authorship", async () => {
     const m = await normalize("dm-extended-text-quote");
     expect(m?.text).toBe("@34600000099 what do you think about this?");
-    expect(m?.mentionedIds).toEqual([BOT_PN]);
     expect(m?.mentionsBot).toBe(true);
     expect(m?.quoted).toEqual({
       messageId: "BAE5F1B8C0DE0001",
@@ -115,7 +112,6 @@ describe("normalizeInbound: groups", () => {
     expect(m?.chatName).toBe("");
     expect(m?.senderId).toBe("34622222222@s.whatsapp.net");
     expect(m?.senderIdAlt).toBe("99988877766655@lid");
-    expect(m?.mentionedIds).toEqual([BOT_LID]);
     expect(m?.mentionsBot).toBe(true);
   });
 
@@ -256,14 +252,5 @@ describe("normalizeInbound: cards", () => {
     const p = await normalizeInbound(poll, { botIds: BOT_IDS, log });
     expect(p?.kind).toBe("other");
     expect(p?.text).toBe("[Poll: Lunch? Options: Pizza, Sushi]");
-  });
-});
-
-describe("toUnixSeconds", () => {
-  it("accepts numbers, strings and Long-shaped values", () => {
-    expect(toUnixSeconds(1758000000)).toBe(1758000000);
-    expect(toUnixSeconds("1758000000")).toBe(1758000000);
-    expect(toUnixSeconds({ low: 1758000000, high: 0, unsigned: false })).toBe(1758000000);
-    expect(toUnixSeconds({ toNumber: () => 1758000001 })).toBe(1758000001);
   });
 });

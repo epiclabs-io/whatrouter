@@ -40,17 +40,12 @@ async function locked<T>(path: string, operation: () => Promise<T>): Promise<T> 
   }
 }
 
-function formattedIdentity(raw: string): string | null {
-  const formatted = formatUserIdentity(raw);
-  return formatted;
-}
-
 function formatIdentityAt(map: YAMLMap, key: string): void {
   const value = map.get(key, true);
   if (!isScalar(value) || typeof value.value !== "string") {
     return;
   }
-  const formatted = formattedIdentity(value.value);
+  const formatted = formatUserIdentity(value.value);
   if (formatted !== null) {
     value.value = formatted;
     value.type = Scalar.QUOTE_DOUBLE;
@@ -62,7 +57,7 @@ function formatIdentityList(sequence: YAMLSeq): void {
     if (!isScalar(value) || typeof value.value !== "string" || value.value.trim() === "*") {
       return;
     }
-    const formatted = formattedIdentity(value.value);
+    const formatted = formatUserIdentity(value.value);
     if (formatted !== null) {
       value.value = formatted;
       value.type = Scalar.QUOTE_DOUBLE;

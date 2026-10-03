@@ -571,7 +571,6 @@ describe("onInbound", () => {
     expect(h.router.table).not.toBe(oldTable);
     expect(h.router.table.has(ALICE)).toBe(false);
     expect(h.router.table.has(CAROL)).toBe(true);
-    expect(h.router.table.rememberedSize).toBe(0);
     expect(await run(h.a, { op: "send", chat_id: ALICE, content: "old" })).toEqual({
       success: false,
       error: "chat not routed to this profile",

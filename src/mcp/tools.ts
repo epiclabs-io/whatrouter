@@ -17,6 +17,7 @@ import {
   parseUserIdentity,
 } from "../whatsapp/jid.js";
 import type { GroupMetadata, WhatsAppPort } from "../whatsapp/port.js";
+import { packageVersion } from "../version.js";
 
 export interface McpToolOptions {
   getConfig: () => Config;
@@ -209,7 +210,7 @@ function generateSecret(current: Config | undefined): string {
 }
 
 export function createMcpServer(opts: McpToolOptions): McpServer {
-  const server = new McpServer({ name: "whatrouter-management", version: "1.0.0" });
+  const server = new McpServer({ name: "whatrouter-management", version: packageVersion() });
   const tool = <Shape extends z.ZodRawShape>(
     name: string,
     description: string,

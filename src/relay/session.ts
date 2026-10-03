@@ -176,9 +176,8 @@ export class Session {
   }
 
   #onGoingIdle(): void {
-    // Durable first: if we crash between the flip and the ack, we over-buffer
-    // (safe) instead of delivering into a gateway that has gone away (lossy).
-    this.#deps.store.buffer.setBufferedOnly(this.#deps.profile, true);
+    // In memory only, and never cleared: this session does not deliver live
+    // again. The next handshake builds a new Session, which starts the same way.
     this.#idleFlipped = true;
     this.#liveOk = false;
     this.#deps.send({ type: "going_idle_ack" });
@@ -239,7 +238,7 @@ export class Session {
         this.#deps.send({ type: "inbound", event: next.event, bufferId: String(next.seq) });
         return;
       }
-      if (this.#deps.store.buffer.clearFlipIfEmpty(this.#deps.profile)) {
+      if (this.#deps.store.buffer.count(this.#deps.profile) === 0) {
         this.#liveOk = true;
         return;
       }

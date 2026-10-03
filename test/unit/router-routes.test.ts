@@ -170,9 +170,10 @@ describe("isRoutedTo", () => {
     for (let i = 0; i < DELIVERED_MEMORY_MAX + 50; i++) {
       table.remember(`3460000${String(i).padStart(4, "0")}@s.whatsapp.net`, "a");
     }
-    expect(table.rememberedSize).toBe(DELIVERED_MEMORY_MAX);
-    // The newest entries survive, the oldest are evicted.
-    expect(table.rememberedProfile("34600001049@s.whatsapp.net")).toBe("a");
+    // Only the newest DELIVERED_MEMORY_MAX survive, so of the 50 extra the
+    // oldest remembered entry is the 51st written.
+    expect(table.rememberedProfile("34600000050@s.whatsapp.net")).toBe("a");
+    expect(table.rememberedProfile("34600000049@s.whatsapp.net")).toBeUndefined();
     expect(table.rememberedProfile("34600000000@s.whatsapp.net")).toBeUndefined();
   });
 });

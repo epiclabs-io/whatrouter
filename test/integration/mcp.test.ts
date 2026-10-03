@@ -10,9 +10,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { parse } from "yaml";
 import { ConfigStore } from "../../src/config/store.js";
-import { makeToken } from "../../src/relay/auth.js";
 import { startServe, type ServeHandle } from "../../src/serve.js";
-import { silentLogger, testConfig } from "../helpers/relay.js";
+import { makeToken, silentLogger, testConfig } from "../helpers/relay.js";
 
 const MANAGEMENT_SECRET = "mcp-management-secret-0123456789abcdef";
 const PROFILE_SECRET = "profile-secret-0123456789abcdef012345";
@@ -793,7 +792,6 @@ profiles:
         message_id: "old-1",
       },
     });
-    handle.store.buffer.setBufferedOnly("ephemeral", true);
     handle.store.policy.set("ephemeral", { requireAddress: false });
     const media = handle.store.media.put("ephemeral", Buffer.from("old"), "text/plain");
     expect(existsSync(join(directory, "media", media.id))).toBe(true);
@@ -811,7 +809,6 @@ profiles:
     expect(recreated.isError).not.toBe(true);
 
     expect(handle.store.buffer.count("ephemeral")).toBe(0);
-    expect(handle.store.buffer.isBufferedOnly("ephemeral")).toBe(false);
     expect(handle.store.policy.get("ephemeral")).toBeNull();
     expect(handle.store.media.getMeta(media.id)).toBeNull();
     expect(existsSync(join(directory, "media", media.id))).toBe(false);

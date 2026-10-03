@@ -14,13 +14,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { debugInboundRoute } from "../../src/debug-inbound.js";
 import { createHttpServer, type HttpRoute } from "../../src/http/server.js";
-import { makeToken } from "../../src/relay/auth.js";
 import { LineAssembler } from "../../src/relay/ndjson.js";
 import { startServe, type ServeHandle } from "../../src/serve.js";
 import type { ConnectorFrame } from "../../src/relay/frames.js";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
 import type { Logger } from "../../src/util/log.js";
-import { delay, silentLogger, testConfig, testEvent, testProfile } from "../helpers/relay.js";
+import {
+  delay,
+  makeToken,
+  silentLogger,
+  testConfig,
+  testEvent,
+  testProfile,
+} from "../helpers/relay.js";
 import { dmRoute } from "../helpers/router.js";
 
 /** Owned by `work`, so an outbound action for it is routable. */
@@ -422,10 +428,7 @@ describe("http routes", () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({});
-    expect(store().policy.get("work")).toEqual({
-      platform: "whatsapp",
-      requireAddress: false,
-    });
+    expect(store().policy.get("work")).toEqual({ requireAddress: false });
   });
 
   it("rejects a policy without a token", async () => {

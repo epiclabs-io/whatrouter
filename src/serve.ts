@@ -19,12 +19,12 @@
  * Nothing here prints a QR code: `serve` refuses to start unpaired and points at
  * `whatrouter pair`, which is the only command allowed to touch the link flow.
  */
-import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { WebSocketServer } from "ws";
 import { ConfigStore } from "./config/store.js";
 import { debugInboundRoute } from "./debug-inbound.js";
+import { EXIT_CONFIG, EXIT_FAILURE, EXIT_OK } from "./exit-codes.js";
 import { closeWebSocketServer, createHttpServer, type HttpServer } from "./http/server.js";
 import { secretMatches } from "./management/auth.js";
 import { createHolds } from "./management/holds.js";
@@ -42,12 +42,8 @@ import { createBaileysClient } from "./whatsapp/baileys-client.js";
 import { createFakeWhatsAppPort, type FakeWhatsAppPort } from "./whatsapp/fake.js";
 import type { Config } from "./config/schema.js";
 import type { Logger } from "./util/log.js";
+import { packageVersion } from "./version.js";
 import type { WhatsAppPort } from "./whatsapp/port.js";
-
-/** Mirrors the exit codes in `cli.ts` (kept local to avoid an import cycle). */
-const EXIT_OK = 0;
-const EXIT_FAILURE = 1;
-const EXIT_CONFIG = 2;
 
 export const PAIRING_HINT =
   "WhatsApp account is not linked. Run: whatrouter pair   (or whatrouter pair --code +<phone>)";
@@ -99,16 +95,6 @@ export interface ServeHandle {
 export type StartServeResult = { ok: true; handle: ServeHandle } | { ok: false; code: number };
 
 const MAINTENANCE_INTERVAL_MS = 3_600_000;
-
-function packageVersion(): string {
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require("../package.json") as { version?: string };
-    return pkg.version ?? "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-}
 
 /**
  * Drops per-profile state for names the config no longer has (D6).

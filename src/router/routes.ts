@@ -59,10 +59,6 @@ export class RouteTable extends Map<string, RouteEntry> {
   rememberedProfile(chatId: string): string | undefined {
     return this.#delivered.get(canonicalChatId(chatId));
   }
-
-  get rememberedSize(): number {
-    return this.#delivered.size;
-  }
 }
 
 /**

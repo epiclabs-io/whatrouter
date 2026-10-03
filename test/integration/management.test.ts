@@ -13,11 +13,10 @@ import pino from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { HOLD_MS } from "../../src/management/holds.js";
-import { makeToken } from "../../src/relay/auth.js";
 import { LineAssembler } from "../../src/relay/ndjson.js";
 import { startServe, type ServeHandle } from "../../src/serve.js";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
-import { delay, testConfig, testEvent, testProfile } from "../helpers/relay.js";
+import { delay, makeToken, testConfig, testEvent, testProfile } from "../helpers/relay.js";
 
 const MGMT_SECRET = "management-secret-0123456789abcdef-xyz";
 const WORK = testProfile("work", { wakeUrl: "http://wake.invalid/work" });

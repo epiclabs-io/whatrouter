@@ -14,11 +14,6 @@ export interface MediaUrlOptions {
 
 let warned = false;
 
-/** Test seam: lets a suite observe the one-time warning again. */
-export function resetMediaUrlWarning(): void {
-  warned = false;
-}
-
 /** `<public_url>` or `http://localhost:<port>`, without a trailing slash. */
 export function mediaBaseUrl(config: Config, opts: MediaUrlOptions = {}): string {
   if (config.publicUrl !== null && config.publicUrl !== "") {

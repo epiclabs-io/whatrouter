@@ -74,7 +74,6 @@ describe("toRelayEvent", () => {
       text: "look at this",
       kind: "image",
       mentionsBot: true,
-      mentionedIds: ["1000@s.whatsapp.net"],
       quoted: {
         messageId: "wa-6",
         text: "previous",

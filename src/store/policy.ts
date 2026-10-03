@@ -7,10 +7,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 export interface RelayPolicy {
-  platform?: string;
   requireAddress?: boolean;
-  freeResponseScopes?: string[];
-  allowOtherBots?: boolean;
 }
 
 export interface PolicyStore {
@@ -35,32 +32,17 @@ function pick(record: Record<string, unknown>, ...keys: string[]): unknown {
   return undefined;
 }
 
-/** Keeps only the four known fields, and only when they have the right type. */
+/** Keeps only the field the router reads, and only when it has the right type. */
 export function normalizePolicy(value: unknown): RelayPolicy {
   if (!isRecord(value)) {
     return {};
   }
   const out: RelayPolicy = {};
 
-  const platform = pick(value, "platform");
-  if (typeof platform === "string") {
-    out.platform = platform;
-  }
-
   // Hermes speaks camelCase here; snake_case is accepted defensively.
   const requireAddress = pick(value, "requireAddress", "require_address");
   if (typeof requireAddress === "boolean") {
     out.requireAddress = requireAddress;
-  }
-
-  const scopes = pick(value, "freeResponseScopes", "free_response_scopes");
-  if (Array.isArray(scopes)) {
-    out.freeResponseScopes = scopes.filter((s): s is string => typeof s === "string");
-  }
-
-  const allowOtherBots = pick(value, "allowOtherBots", "allow_other_bots");
-  if (typeof allowOtherBots === "boolean") {
-    out.allowOtherBots = allowOtherBots;
   }
 
   return out;

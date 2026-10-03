@@ -18,6 +18,7 @@ import type { Config, ProfileConfig } from "../config/schema.js";
 import { rawToString } from "../http/server.js";
 import type { Store } from "../store/db.js";
 import type { Logger } from "../util/log.js";
+import { startWebSocketHeartbeat } from "../websocket-heartbeat.js";
 import type { CapabilityDescriptor, OutboundAction, OutboundResult, RelayEvent } from "./frames.js";
 import { encodeFrame, LineAssembler, parseGatewayFrame } from "./ndjson.js";
 import { Session } from "./session.js";
@@ -81,8 +82,6 @@ export interface RelayHubOptions {
   now?: () => number;
 }
 
-const PING_INTERVAL_MS = 30_000;
-const PONG_TIMEOUT_MS = 60_000;
 const WAKE_TIMEOUT_MS = 10_000;
 /** How long a detached relay socket gets to finish its close handshake. */
 const DETACH_GRACE_MS = 5_000;
@@ -94,7 +93,6 @@ interface SessionEntry {
   session: Session;
   profile: ProfileConfig;
   ping: NodeJS.Timeout;
-  lastPong: number;
 }
 
 export function createRelayHub(opts: RelayHubOptions): RelayHub {
@@ -144,31 +142,13 @@ export function createRelayHub(opts: RelayHubOptions): RelayHub {
       log: childLog,
     });
 
-    const ping = setInterval(() => {
-      const entry = sessions.get(profile.name);
-      if (entry === undefined) {
-        return;
-      }
-      if (Date.now() - entry.lastPong > PONG_TIMEOUT_MS) {
-        childLog.warn("no pong within 60s; terminating the relay socket");
-        ws.terminate();
-        return;
-      }
-      try {
-        ws.ping();
-      } catch {
-        /* the socket is going away anyway */
-      }
-    }, PING_INTERVAL_MS);
-    ping.unref?.();
+    const ping = startWebSocketHeartbeat(ws, () => {
+      childLog.warn("no pong within 60s; terminating the relay socket");
+    });
 
-    const entry: SessionEntry = { ws, session, profile, ping, lastPong: Date.now() };
+    const entry: SessionEntry = { ws, session, profile, ping };
     sessions.set(profile.name, entry);
     childLog.info({ ip }, "relay session connected");
-
-    ws.on("pong", () => {
-      entry.lastPong = Date.now();
-    });
 
     ws.on("message", (data) => {
       for (const line of assembler.push(rawToString(data))) {

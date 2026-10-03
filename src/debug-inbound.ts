@@ -107,11 +107,10 @@ function mediaKindFor(kind: string | undefined, mime: string): MediaKind {
  *   "senderId": "…", "senderIdAlt": "…",      // default: chatId / null
  *   "senderName": "…", "chatName": "…",       // default: the id's digits
  *   "messageId": "…",                          // default: debug-<n>
- *   "mentionsBot": false, "mentionedIds": [],
+ *   "mentionsBot": false,
  *   "quoted": {"messageId","text","senderId","isFromBot"},
  *   "kind": "text|image|…",                    // default: from the media, else text
- *   "mediaBase64": "…", "mediaMime": "…", "mediaFilename": "…", "mediaCaption": "…",
- *   "timestamp": 1758000000
+ *   "mediaBase64": "…", "mediaMime": "…", "mediaFilename": "…", "mediaCaption": "…"
  * }
  * ```
  */
@@ -189,12 +188,6 @@ export function inboundFromDebugBody(body: unknown): InboundMessage {
           isFromBot: quotedRaw["isFromBot"] === true,
         };
 
-  const mentionedIds = Array.isArray(raw["mentionedIds"])
-    ? raw["mentionedIds"]
-        .filter((v): v is string => typeof v === "string")
-        .map((v) => normalizeJid(v))
-    : [];
-
   debugCounter += 1;
 
   return {
@@ -208,12 +201,7 @@ export function inboundFromDebugBody(body: unknown): InboundMessage {
     senderName,
     text,
     kind,
-    timestamp:
-      typeof raw["timestamp"] === "number" && Number.isFinite(raw["timestamp"])
-        ? Math.floor(raw["timestamp"])
-        : Math.floor(Date.now() / 1000),
     mentionsBot: raw["mentionsBot"] === true,
-    mentionedIds,
     quoted,
     media,
   };

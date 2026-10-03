@@ -22,18 +22,6 @@ export function sign(payload: string, secret: string): string {
   return createHmac("sha256", secret).update(payload, "utf8").digest("hex");
 }
 
-/** Mints a token the way the gateway does (used by `whatrouter env` and by tests). */
-export function makeToken(
-  payload: string,
-  secret: string,
-  ttlSeconds: number,
-  nowSeconds: number = Math.floor(Date.now() / 1000)
-): string {
-  const exp = ttlSeconds > 0 ? Math.floor(nowSeconds) + Math.floor(ttlSeconds) : 0;
-  const signed = `${payload}:${exp}`;
-  return Buffer.from(`${signed}:${sign(signed, secret)}`, "utf8").toString("base64url");
-}
-
 interface ParsedToken {
   payload: string;
   exp: number;

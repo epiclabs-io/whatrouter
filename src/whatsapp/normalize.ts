@@ -112,11 +112,6 @@ export function toNumber(value: unknown): number | null {
   return null;
 }
 
-/** Unix seconds; an absent or nonsensical timestamp means "now". */
-export function toUnixSeconds(value: unknown): number {
-  return toNumber(value) ?? Math.floor(Date.now() / 1000);
-}
-
 function node(content: Content, type: ContentType): Record<string, unknown> | undefined {
   const value = (content as Record<string, unknown>)[type];
   return typeof value === "object" && value !== null
@@ -373,9 +368,7 @@ export async function normalizeInbound(
     senderName,
     text,
     kind,
-    timestamp: toUnixSeconds(msg.messageTimestamp),
     mentionsBot,
-    mentionedIds,
     quoted: quotedFrom(contextInfo, ctx.botIds),
     media,
   };
