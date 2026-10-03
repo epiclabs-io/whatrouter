@@ -1,6 +1,6 @@
 /**
  * Raw YAML shape (zod) + the normalized `Config` the rest of the program uses.
- * Everything downstream of `loadConfig` sees canonical JIDs and camelCase fields.
+ * Everything downstream of validation sees canonical JIDs and camelCase fields.
  */
 import { z } from "zod";
 

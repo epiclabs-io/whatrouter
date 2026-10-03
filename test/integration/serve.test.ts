@@ -162,7 +162,7 @@ describe("serve: routing, gating and isolation", () => {
     dataDir = mkdtempSync(join(tmpdir(), "whatrouter-serve-"));
     config = serveConfig(dataDir);
     const started = await startServe({
-      config,
+      getConfig: () => config,
       log: silentLogger(),
       io,
       fake: true,
@@ -411,7 +411,7 @@ describe("serve: default_profile", () => {
     dataDir = mkdtempSync(join(tmpdir(), "whatrouter-serve-default-"));
     const config = serveConfig(dataDir, { defaultProfile: "b" });
     const started = await startServe({
-      config,
+      getConfig: () => config,
       log: silentLogger(),
       io,
       fake: true,
@@ -481,7 +481,7 @@ describe("serve: default_profile is a DM-only fallback", () => {
       },
     });
     const started = await startServe({
-      config,
+      getConfig: () => config,
       log: silentLogger(),
       io,
       fake: true,
@@ -588,7 +588,7 @@ describe("serve: startup reconciliation", () => {
       const realMedia = store.media.put("a", Buffer.from("real"), "text/plain");
 
       const started = await startServe({
-        config,
+        getConfig: () => config,
         log: silentLogger(),
         io,
         fake: true,

@@ -144,7 +144,7 @@ async function startServer(overrides: Partial<Config> = {}): Promise<Fixture> {
   const config = { ...testConfig({ profiles: [WORK, HOME], ...overrides }), dataDir: tempDir };
   const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
   const started = await startServe({
-    config,
+    getConfig: () => config,
     log: silentLogger(),
     io,
     fake: true,

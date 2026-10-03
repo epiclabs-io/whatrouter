@@ -125,7 +125,7 @@ export async function run(argv: string[], io: CliIo = processIo): Promise<number
         const configStore = await ConfigStore.load(path);
         reportIssues(io, "warning", [...configStore.warnings]);
         return await runServe({
-          config: configStore.get(),
+          getConfig: () => configStore.get(),
           configStore,
           log: createLogger({ level: configStore.get().logLevel, name: "whatrouter" }),
           io,

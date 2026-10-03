@@ -178,7 +178,7 @@ async function startServer(overrides: Partial<Config> = {}): Promise<Fixture> {
   const clock = { ms: START_MS };
   const timers: Fixture["timers"] = [];
   const started = await startServe({
-    config,
+    getConfig: () => config,
     log: pino({ level: "trace" }, sink),
     io,
     fake: true,
@@ -336,6 +336,8 @@ describe("auth and route", () => {
     expect(await missing.closed()).toEqual({ code: 4401, reason: "unauthorized" });
     const wrong = new Manager(fixture.port, `${MGMT_SECRET}-nope`);
     expect(await wrong.closed()).toEqual({ code: 4401, reason: "unauthorized" });
+    const bare = new Client(fixture.port, "/management", MGMT_SECRET);
+    expect(await bare.closed()).toEqual({ code: 4401, reason: "unauthorized" });
 
     const ok = new Manager(fixture.port);
     expect(await ok.subscribe("s1")).toMatchObject({ success: true });

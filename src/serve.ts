@@ -33,6 +33,7 @@ import type { PendingProfile } from "./management/frames.js";
 import { createMcpEndpoint } from "./mcp/endpoint.js";
 import { createRouter, type RelayDeliverer, type Router } from "./router/router.js";
 import { buildDescriptor } from "./relay/descriptor.js";
+import { parseBearer } from "./relay/auth.js";
 import { createRelayGate } from "./relay/gate.js";
 import { createRelayHub } from "./relay/hub.js";
 import { relayRoutes } from "./relay/http.js";
@@ -54,11 +55,9 @@ export interface ServeIo {
 }
 
 export interface ServeOptions {
-  config?: Config | undefined;
+  getConfig: () => Config;
   /** Writable live config used by production and MCP mutation tools. */
   configStore?: ConfigStore | undefined;
-  /** Convenience alternative to a preloaded ConfigStore. */
-  configPath?: string | undefined;
   log: Logger;
   io: ServeIo;
   /** Defaults to `WHATROUTER_FAKE_WHATSAPP=1`. */
@@ -135,15 +134,9 @@ function reconcileProfileState(store: Store, configured: readonly string[], log:
  * from `runServe` so tests can bind port 0 and still find out where we landed.
  */
 export async function startServe(opts: ServeOptions): Promise<StartServeResult> {
-  const configStore =
-    opts.configStore ??
-    (opts.configPath === undefined ? undefined : await ConfigStore.load(opts.configPath));
-  const config = configStore?.get() ?? opts.config;
-  if (config === undefined) {
-    throw new Error("startServe requires config, configStore, or configPath");
-  }
+  const { configStore, getConfig } = opts;
+  const config = getConfig();
   const { log, io } = opts;
-  const getConfig = (): Config => configStore?.get() ?? config;
   const fake = opts.fake ?? process.env["WHATROUTER_FAKE_WHATSAPP"] === "1";
   if (fake) {
     log.warn(
@@ -488,7 +481,7 @@ export async function startServe(opts: ServeOptions): Promise<StartServeResult> 
  * repeated 4401 as revocation). Bad attempts are simply rejected.
  */
 function managementAuthorized(req: IncomingMessage, secret: string, log: Logger): boolean {
-  const token = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? null;
+  const token = parseBearer(req.headers.authorization);
   if (token !== null && secretMatches(token, secret)) {
     return true;
   }

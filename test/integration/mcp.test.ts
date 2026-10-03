@@ -68,7 +68,7 @@ profiles:
     );
     configStore = await ConfigStore.load(configPath);
     const started = await startServe({
-      config: configStore.get(),
+      getConfig: () => configStore.get(),
       configStore,
       log: silentLogger(),
       io,
@@ -817,12 +817,13 @@ profiles:
     ).not.toHaveProperty("blockedUntilMs");
   });
 
-  it("keeps direct-Config serving available with clear read-only mutation errors", async () => {
+  it("keeps read-only getConfig serving available with clear mutation errors", async () => {
+    const config = testConfig({
+      dataDir: join(directory, "direct-data"),
+      management: { secret: MANAGEMENT_SECRET },
+    });
     const direct = await startServe({
-      config: testConfig({
-        dataDir: join(directory, "direct-data"),
-        management: { secret: MANAGEMENT_SECRET },
-      }),
+      getConfig: () => config,
       log: silentLogger(),
       io,
       fake: true,

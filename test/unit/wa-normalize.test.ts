@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WAMessage } from "@whiskeysockets/baileys";
-import { normalizeInbound } from "../../src/whatsapp/normalize.js";
+import { normalizeInbound, toNumber } from "../../src/whatsapp/normalize.js";
 import { BOT_IDS, BOT_PN, fixture, silentLog } from "../helpers/wa.js";
 
 const log = silentLog();
@@ -252,5 +252,15 @@ describe("normalizeInbound: cards", () => {
     const p = await normalizeInbound(poll, { botIds: BOT_IDS, log });
     expect(p?.kind).toBe("other");
     expect(p?.text).toBe("[Poll: Lunch? Options: Pizza, Sushi]");
+  });
+});
+
+describe("toNumber", () => {
+  it("accepts numbers, strings and Long-shaped values", () => {
+    expect(toNumber(1758000000)).toBe(1758000000);
+    expect(toNumber("1758000000")).toBe(1758000000);
+    expect(toNumber({ low: 1758000000, high: 0, unsigned: false })).toBe(1758000000);
+    expect(toNumber({ toNumber: () => 1758000001 })).toBe(1758000001);
+    expect(toNumber({ unusable: true })).toBeNull();
   });
 });
