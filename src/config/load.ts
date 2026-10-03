@@ -403,7 +403,7 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
     if (!routedGroups.has(id)) {
       warnings.push({
         path: `groups.${id}`,
-        message: `registered group "${id}" has no profile route`,
+        message: `registered group "${id}" has no profile route; its messages are dropped`,
       });
     }
   }

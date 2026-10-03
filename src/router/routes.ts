@@ -121,9 +121,15 @@ export function resolveProfile(
     }
   }
 
-  const fallback = defaultProfileOf(config);
-  if (fallback !== null) {
-    return { profile: fallback, route: null };
+  // `default_profile` is a DM-only fallback (D5). A group has to be routed on
+  // purpose: every member of an unregistered-but-registered group would
+  // otherwise be answered by whoever the operator made the default, which is
+  // not a decision anyone made about those people.
+  if (m.chatType === "dm") {
+    const fallback = defaultProfileOf(config);
+    if (fallback !== null) {
+      return { profile: fallback, route: null };
+    }
   }
   return null;
 }
