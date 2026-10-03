@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { isMap } from "yaml";
+import { isMap, stringify } from "yaml";
 import type { ConfigStore, ConfigDocument } from "../config/store.js";
 import { relayUrl, type Config, type Issue } from "../config/schema.js";
 import type {
@@ -46,7 +46,16 @@ const destructiveExternalWrite = {
 } as const;
 
 function reply(result: unknown, text: string) {
-  return { structuredContent: { result }, content: [{ type: "text" as const, text }] };
+  const structuredContent = { result };
+  return {
+    structuredContent,
+    content: [
+      {
+        type: "text" as const,
+        text: `# ${text}\n${stringify(structuredContent, { lineWidth: 0 })}`,
+      },
+    ],
+  };
 }
 
 function failure(error: unknown) {

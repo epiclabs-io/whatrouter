@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { ConfigStore } from "../../src/config/store.js";
 import { startServe, type ServeHandle } from "../../src/serve.js";
 import { silentLogger, testConfig } from "../helpers/relay.js";
@@ -162,6 +163,16 @@ profiles:
       ].sort()
     );
     expect(listed.tools.every((tool) => tool.outputSchema !== undefined)).toBe(true);
+  });
+
+  it("renders text content that parses back to the structured content", async () => {
+    const listed = await client.callTool({ name: "list_profiles", arguments: {} });
+    const structured = listed.structuredContent;
+    const blocks = listed.content as Array<{ type: string; text: string }>;
+    const text = blocks.find((block) => block.type === "text")?.text;
+    expect(text).toBeDefined();
+    expect(text).toMatch(/^# /); // comment header present
+    expect(parse(text!)).toEqual(structured); // lossless round-trip
   });
 
   it("evicts the least recently used session instead of refusing new ones", async () => {
