@@ -403,6 +403,14 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       guardSocketErrors(ws, "relay");
       if (!outcome.ok) {
         logAuthFailure(req, outcome.reason);
+        if (outcome.reason === "throttled") {
+          // 1013, not 4401. A throttle is our own rate limit, and a gateway
+          // reads 4401 after the handshake as revocation and stops reconnecting
+          // — so being briefly throttled would lock a healthy gateway out for
+          // good. 1013 is the code that means "come back", which is the truth.
+          ws.close(1013, "try again later");
+          return;
+        }
         const reason = outcome.reason === "expired" ? "expired" : "unauthorized";
         ws.close(4401, reason);
         return;
