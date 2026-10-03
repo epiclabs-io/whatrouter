@@ -70,7 +70,7 @@ describe("ConfigStore", () => {
     const { path, store } = await fixture();
     const text = await readFile(path, "utf8");
     const before = await stat(path);
-    const snapshot = store.current;
+    const snapshot = store.get();
 
     await expect(
       store.mutate((document) => {
@@ -80,7 +80,7 @@ describe("ConfigStore", () => {
 
     expect(await readFile(path, "utf8")).toBe(text);
     expect((await stat(path)).ino).toBe(before.ino);
-    expect(store.current).toBe(snapshot);
+    expect(store.get()).toBe(snapshot);
   });
 
   it("serializes concurrent mutations against the latest file", async () => {
@@ -89,8 +89,8 @@ describe("ConfigStore", () => {
       store.mutate((document) => document.set("default_profile", "work")),
       store.mutate((document) => document.set("allow_unrouted_outbound", true)),
     ]);
-    expect(store.current.defaultProfile).toBe("work");
-    expect(store.current.allowUnroutedOutbound).toBe(true);
+    expect(store.get().defaultProfile).toBe("work");
+    expect(store.get().allowUnroutedOutbound).toBe(true);
   });
 
   it("preserves comments attached to formatted identity scalars", async () => {

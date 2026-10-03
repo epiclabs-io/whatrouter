@@ -1,9 +1,10 @@
 # WhatRouter — Hermes Relay connector for WhatsApp.
 #
 #   docker build -t whatrouter:local .
-#   docker run --rm -v "$PWD/config.yaml:/data/config.yaml:ro" whatrouter:local check-config
-#   docker run --rm -it -v whatrouter-data:/data whatrouter:local pair
-#   docker run -d -p 8466:8466 -v whatrouter-data:/data whatrouter:local
+#   mkdir data && cp config.example.yaml data/config.yaml
+#   docker run --rm -v "$PWD/data:/data" whatrouter:local check-config
+#   docker run --rm -it -v "$PWD/data:/data" whatrouter:local pair
+#   docker run -d -p 8466:8466 -v "$PWD/data:/data" whatrouter:local
 #
 # The config lives in the volume at /data/config.yaml ($WHATROUTER_CONFIG).
 

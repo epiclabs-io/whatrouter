@@ -13,6 +13,7 @@
  */
 import type { RawData, WebSocket } from "ws";
 import type { Logger } from "../util/log.js";
+import { startWebSocketHeartbeat } from "../websocket-heartbeat.js";
 import { LineAssembler } from "../relay/ndjson.js";
 import {
   encodeManagementFrame,
@@ -33,8 +34,6 @@ export const MANAGEMENT_MAX_LINE_BYTES = 64 * 1024;
 /** Largest single WebSocket message, which may coalesce several frames. */
 export const MANAGEMENT_MAX_MESSAGE_BYTES = 1024 * 1024;
 const DEFAULT_MAX_BUFFERED_BYTES = 1024 * 1024;
-const PING_INTERVAL_MS = 30_000;
-const PONG_TIMEOUT_MS = 60_000;
 
 export interface ManagementEndpointOptions {
   log: Logger;
@@ -53,7 +52,6 @@ interface Connection {
   assembler: LineAssembler;
   events: ReadonlySet<ManagementEventName>;
   ping: NodeJS.Timeout;
-  lastPong: number;
   /** Set once we have decided to close; nothing more is read or written. */
   closing: boolean;
 }
@@ -97,19 +95,9 @@ export class ManagementEndpoint {
       return;
     }
 
-    const ping = setInterval(() => {
-      if (Date.now() - conn.lastPong > PONG_TIMEOUT_MS) {
-        log.warn("no pong within 60s; terminating the management socket");
-        ws.terminate();
-        return;
-      }
-      try {
-        ws.ping();
-      } catch {
-        /* the socket is going away anyway */
-      }
-    }, PING_INTERVAL_MS);
-    ping.unref?.();
+    const ping = startWebSocketHeartbeat(ws, () => {
+      log.warn("no pong within 60s; terminating the management socket");
+    });
 
     const conn: Connection = {
       ws,
@@ -117,15 +105,11 @@ export class ManagementEndpoint {
       assembler: new LineAssembler(false),
       events: new Set(),
       ping,
-      lastPong: Date.now(),
       closing: false,
     };
     this.#conn = conn;
     log.info({ ip }, "management client connected");
 
-    ws.on("pong", () => {
-      conn.lastPong = Date.now();
-    });
     ws.on("message", (data: RawData, isBinary: boolean) => {
       this.#onMessage(conn, data, isBinary);
     });

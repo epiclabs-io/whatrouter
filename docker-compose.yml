@@ -1,13 +1,18 @@
 # WhatRouter with Docker Compose.
 #
-# The config file is bind-mounted read-only at /data/config.yaml (the path
-# $WHATROUTER_CONFIG points at inside the image), everything else WhatRouter
-# writes — wa-auth/, whatrouter.sqlite, media/ — lives in the named volume.
+# Everything WhatRouter reads and writes lives in one host directory, ./data,
+# bind-mounted at /data. That includes config.yaml — the path
+# $WHATROUTER_CONFIG points at inside the image — because the MCP management
+# tools rewrite it atomically, so it cannot be a read-only mount.
+#
+# ./data must be writable by uid 1000, the image's `node` user. If it is not:
+#
+#   sudo chown 1000:1000 data
 #
 # First run, in order:
 #
-#   cp config.example.yaml config.yaml    # then edit public_url, profiles, routes,
-#                                         # secrets; keep data_dir: /data (the volume)
+#   mkdir data && cp config.example.yaml data/config.yaml
+#   # ...then edit public_url, profiles, routes and secrets; keep data_dir: /data
 #   docker compose run --rm whatrouter check-config
 #   docker compose run --rm -it whatrouter pair
 #   # ...or, if you cannot scan a QR code on this machine:
@@ -18,12 +23,6 @@
 # Per-instance Hermes env lines:
 #
 #   docker compose run --rm whatrouter env work
-#
-# Alternative to the bind mount: drop the `./config.yaml:...` line and copy the
-# file into the volume instead, which survives moving the file on the host:
-#
-#   docker compose create
-#   docker compose cp config.yaml whatrouter:/data/config.yaml
 
 services:
   whatrouter:
@@ -33,12 +32,8 @@ services:
     ports:
       - "8466:8466"
     volumes:
-      - whatrouter-data:/data
-      - ./config.yaml:/data/config.yaml:ro
+      - ./data:/data
     environment:
       - WHATROUTER_LOG_LEVEL=info
-      # Secrets can stay out of config.yaml as ${WORK_SECRET} etc.
+      # Secrets can stay out of data/config.yaml as ${WORK_SECRET} etc.
       # - WORK_SECRET=${WORK_SECRET}
-
-volumes:
-  whatrouter-data:

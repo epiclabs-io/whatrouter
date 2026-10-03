@@ -7,16 +7,15 @@
 import type { DatabaseSync } from "node:sqlite";
 
 export interface RelayPolicy {
-  platform?: string;
   requireAddress?: boolean;
-  freeResponseScopes?: string[];
-  allowOtherBots?: boolean;
 }
 
 export interface PolicyStore {
   set(profile: string, policy: unknown, nowSeconds?: number): RelayPolicy;
   get(profile: string): RelayPolicy | null;
   delete(profile: string): boolean;
+  /** Every profile that still has a policy, deduplicated. */
+  profiles(): string[];
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -33,32 +32,17 @@ function pick(record: Record<string, unknown>, ...keys: string[]): unknown {
   return undefined;
 }
 
-/** Keeps only the four known fields, and only when they have the right type. */
+/** Keeps only the field the router reads, and only when it has the right type. */
 export function normalizePolicy(value: unknown): RelayPolicy {
   if (!isRecord(value)) {
     return {};
   }
   const out: RelayPolicy = {};
 
-  const platform = pick(value, "platform");
-  if (typeof platform === "string") {
-    out.platform = platform;
-  }
-
   // Hermes speaks camelCase here; snake_case is accepted defensively.
   const requireAddress = pick(value, "requireAddress", "require_address");
   if (typeof requireAddress === "boolean") {
     out.requireAddress = requireAddress;
-  }
-
-  const scopes = pick(value, "freeResponseScopes", "free_response_scopes");
-  if (Array.isArray(scopes)) {
-    out.freeResponseScopes = scopes.filter((s): s is string => typeof s === "string");
-  }
-
-  const allowOtherBots = pick(value, "allowOtherBots", "allow_other_bots");
-  if (typeof allowOtherBots === "boolean") {
-    out.allowOtherBots = allowOtherBots;
   }
 
   return out;
@@ -71,6 +55,7 @@ export function createPolicyStore(db: DatabaseSync): PolicyStore {
   );
   const select = db.prepare("SELECT policy FROM policies WHERE profile = ?");
   const remove = db.prepare("DELETE FROM policies WHERE profile = ?");
+  const distinctProfiles = db.prepare("SELECT DISTINCT profile FROM policies");
 
   return {
     set(profile, policy, nowSeconds = Math.floor(Date.now() / 1000)) {
@@ -93,6 +78,12 @@ export function createPolicyStore(db: DatabaseSync): PolicyStore {
 
     delete(profile) {
       return Number(remove.run(profile).changes) > 0;
+    },
+
+    profiles() {
+      return (distinctProfiles.all() as Array<{ profile?: string }>)
+        .map((row) => row.profile)
+        .filter((p): p is string => typeof p === "string");
     },
   };
 }

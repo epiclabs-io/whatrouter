@@ -1,94 +1,122 @@
-# WhatRouter example configuration.
-# In Docker, copy this to the writable volume as /data/config.yaml and edit it there.
+# WhatRouter configuration reference.
+#
+# In Docker, copy this file to the writable volume as /data/config.yaml. Keep
+# data_dir: /data and make ./data writable by uid 1000. With Node directly, use
+# a writable data_dir such as ./data.
+#
 # Validate with: whatrouter check-config /data/config.yaml
-# Path resolution: --config <path>, else $WHATROUTER_CONFIG, else ./config.yaml.
+# Config path: --config <path>, else $WHATROUTER_CONFIG, else ./config.yaml.
+#
+# BOOT means read once when `serve` starts. LIVE means a successful MCP config
+# write affects the running router. Hand-edit the file only while stopped.
 
+# BOOT. HTTP/WebSocket bind address (not the group sender allowlist below).
+# Default: 0.0.0.0:8466.
 listen: 0.0.0.0:8466
 
-# Public base URL Hermes instances dial and media URLs are built from.
-# Omit it and everything falls back to http://localhost:8466.
+# BOOT. External HTTP(S) base used for relay and media URLs. Default: null,
+# which falls back to localhost and therefore works only when Hermes is local.
 public_url: https://whatrouter.example.com
 
-# wa-auth/, whatrouter.sqlite, media/ live here. /data is the Docker volume;
-# when running with Node directly, use a writable path such as ./data.
+# BOOT. Holds wa-auth/, whatrouter.sqlite, and media/. Default: ./data.
 data_dir: /data
 
+# BOOT. trace, debug, info, warn, error, or fatal. Default: info.
+# WHATROUTER_LOG_LEVEL overrides this at startup.
 log_level: info
 
+# BOOT. The whole block is optional; these are its defaults.
 whatsapp:
-  edit_streaming: true # streams the reply by editing its message; also flips supports_edit in the descriptor
+  edit_streaming: true # advertise/use message edits while streaming
   send_read_receipts: false
-  chunk_delay_ms: 300
-  send_timeout_ms: 60000
+  chunk_delay_ms: 300 # delay between chunks of a long reply
+  send_timeout_ms: 60000 # timeout for one outbound WhatsApp operation
 
+# BOOT. The whole block is optional; these are its defaults.
 buffer:
-  max_age_seconds: 1209600 # 14 days
-  wake_cooldown_seconds: 60
+  max_age_seconds: 1209600 # 14 days; purge older unacked messages
+  wake_cooldown_seconds: 60 # minimum time between wake_url pokes
 
+# BOOT. The whole block is optional; these are its defaults.
 media:
-  max_bytes: 26214400 # 25 MiB
-  retention_seconds: 604800 # 7 days
+  max_bytes: 26214400 # 25 MiB per inbound/outbound attachment
+  retention_seconds: 604800 # 7 days for re-hosted media
 
-# null = drop messages from chats no route matches.
+# LIVE. DM-only fallback for messages no route claims. Default: null (drop).
+# Groups always require an explicit profile route.
 default_profile: null
 
-# Profiles may only act on chats routed to them unless this is true.
+# BOOT. Global escape hatch allowing outbound to unrouted chats. Default: false.
 allow_unrouted_outbound: false
 
-# Optional management toolset: WebSocket /management and Streamable HTTP MCP
-# /mcp share this static bearer. Omit the block to disable both routes. The
-# secret must be >= 32 chars and differ from every profile secret.
-# management:
-#   secret: ${WHATROUTER_MANAGEMENT_SECRET}
-#   # alternatively:
-#   # secret_file: /run/secrets/whatrouter-management
+# BOOT. Full-control bearer shared by /management and /mcp. Omit the block or
+# set management: null to disable both. Exactly one credential source is
+# required; its resolved value must be 32+ chars and unique across all secrets.
+management:
+  secret: replace-me-management-00000000000000000000
+  # Alternative; file contents are trimmed:
+  # secret_file: /run/secrets/whatrouter-management
 
-# Registered groups are the account-wide inbound allowlist. Messages from any
-# group absent here are dropped, even if that group has a profile route.
-# listen: ["*"] accepts every sender and "*" must be the only entry. An empty
-# list accepts nobody. User identities may be quoted bare phone numbers, full
-# phone JIDs, or explicit <digits>@lid JIDs.
+# LIVE, MCP-MANAGED. Registered groups form the account-wide inbound allowlist.
+# A group absent here is dropped even when a profile route names it.
+#
+# Top-level `listen` is the server bind address. `groups.*.listen` below is a
+# sender allowlist: [] accepts nobody; ["*"] accepts everyone, and "*" must be
+# the only entry. Users may be bare phone numbers, phone JIDs, or <digits>@lid.
 groups:
   "120363001234567890@g.us":
+    # LIVE, MCP-MANAGED by register_group/update_group. Default: null.
     display_name: Project Room
-    admins_seen: 2 # admin count observed when the group was registered
-    listen_source: explicit # explicit, or default_admin when MCP chose the default
+    # LIVE, MCP-GENERATED when registered. Default: null.
+    admins_seen: 2
+    # LIVE, MCP-GENERATED. Required: explicit or default_admin.
+    listen_source: explicit
+    # LIVE, MCP-MANAGED by set_listen_list. Default: [].
     listen:
-      - "34600000000" # quoted bare number: the readable, recommended form
-      # LIDs are also accepted where users are named (routes, allowed_senders,
-      # listen) but warn: they are opaque and may not match later traffic.
-      # - "987654321098765@lid"
+      - "34600000000"
+      # LIDs work here and in routes/allowed_senders, but are opaque and may not
+      # match later traffic: "987654321098765@lid".
 
   "120363009876543210@g.us":
     display_name: Bot-Owned Room
     admins_seen: 1
     listen_source: default_admin
-    listen: ["*"] # safe registration default only when the bot was the sole admin
+    listen: ["*"] # MCP chooses this default only when the bot is sole admin
 
+# LIVE, MCP-MANAGED. At least one profile is required. gateway_id and resolved
+# secrets must be unique. MCP can create/update/delete profiles, but cannot
+# rename one or change gateway_id; delete and recreate instead.
 profiles:
   work:
+    # LIVE, generated by create_profile or set at bootstrap. Required.
     gateway_id: gw-work
-    # Any string >= 32 chars; must be unique per profile. Generate with:
+    # LIVE. Exactly one of secret or secret_file; generate with:
     #   openssl rand -hex 32
+    # Inline secrets can be rotated by MCP. ${ENV_VAR} interpolation is allowed,
+    # but environment-backed and secret_file values are rotated at their source.
     secret: replace-me-work-0000000000000000000000
-    # Alternatives to an inline secret:
-    #   secret: ${WORK_SECRET}            # ${ENV_VAR} interpolation
-    #   secret_file: /run/secrets/work    # file contents, trimmed
+    # secret: ${WORK_SECRET}
+    # secret_file: /run/secrets/work
+    # LIVE, MCP-MANAGED by update_profile. Defaults: null.
     display_name: Work Agent
-    wake_url: null # optional GET poked when a message arrives while offline
+    wake_url: null # otherwise an HTTP(S) GET used when buffered work appears
+    # LIVE, MCP-MANAGED. update_profile replaces the complete list. Default: [].
     routes:
       - dm: "+34600000000"
       - group: "120363001234567890@g.us"
+        # Optional. If omitted: gateway policy, then effective fallback true.
         require_mention: true
-        # Extra narrowing after the registry listen list; it cannot widen it.
+        # Optional extra narrowing after groups.<jid>.listen; cannot widen it.
         allowed_senders: ["34600000000"]
 
   home:
     gateway_id: gw-home
     secret: replace-me-home-0000000000000000000000
+    # secret_file: /run/secrets/home
     display_name: Home Agent
     wake_url: null
     routes:
       - dm: "+34600000001"
       - group: "120363009876543210@g.us"
         require_mention: false
+        # allowed_senders: []

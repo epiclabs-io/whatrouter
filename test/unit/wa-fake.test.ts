@@ -14,12 +14,9 @@ function inbound(overrides: Partial<InboundMessage> = {}): InboundMessage {
     senderName: "Alice",
     text: "hello",
     kind: "text",
-    timestamp: 1758000000,
     mentionsBot: false,
-    mentionedIds: [],
     quoted: null,
     media: null,
-    downloadFailed: false,
     ...overrides,
   };
 }

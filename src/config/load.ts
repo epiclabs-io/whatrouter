@@ -403,7 +403,7 @@ export function validateConfig(raw: unknown, ctx: ValidateContext = {}): Validat
     if (!routedGroups.has(id)) {
       warnings.push({
         path: `groups.${id}`,
-        message: `registered group "${id}" has no profile route`,
+        message: `registered group "${id}" has no profile route; its messages are dropped`,
       });
     }
   }
@@ -480,10 +480,6 @@ export async function loadConfigFile(path: string): Promise<{ config: Config; wa
     throw new ConfigError(result.errors);
   }
   return { config: result.config, warnings: result.warnings };
-}
-
-export async function loadConfig(path: string): Promise<Config> {
-  return (await loadConfigFile(path)).config;
 }
 
 export { ConfigError } from "./schema.js";

@@ -1,12 +1,7 @@
 /**
- * Durable, ack-gated per-profile inbound buffer (docs/DESIGN.md §"Buffer /
- * delivery state machine"). Rows survive restarts; a row is deleted only when
- * the gateway acks its `bufferId`, which is what makes replay exactly-once as
- * observed by the gateway.
- *
- * `flips` holds the durable "buffered only" bit set by `going_idle`: it is
- * cleared only when the buffer has drained to empty, atomically with that
- * check, so an event appended in the same instant cannot be lost to live mode.
+ * Durable, ack-gated per-profile inbound buffer. Rows survive restarts; a row
+ * is deleted only when the gateway acknowledges its `bufferId`, providing
+ * exactly-once replay as observed by the gateway.
  */
 import type { DatabaseSync } from "node:sqlite";
 import type { RelayEvent } from "../relay/frames.js";
@@ -27,11 +22,7 @@ export interface BufferStore {
   nextUnacked(profile: string): BufferedEvent | null;
   ack(profile: string, seq: number): boolean;
   count(profile: string): number;
-  setBufferedOnly(profile: string, on: boolean): void;
-  isBufferedOnly(profile: string): boolean;
-  /** Clears the durable flip iff the buffer is empty; returns whether it did. */
-  clearFlipIfEmpty(profile: string): boolean;
-  /** Deletes all buffered events and durable delivery state for one profile. */
+  /** Deletes all buffered events for one profile. */
   purgeProfile(profile: string): number;
   purgeOlderThan(maxAgeSeconds: number, nowSeconds?: number): number;
   profiles(): string[];
@@ -46,14 +37,7 @@ export function createBufferStore(db: DatabaseSync): BufferStore {
   const countRows = db.prepare("SELECT COUNT(*) AS n FROM buffer WHERE profile = ?");
   const purge = db.prepare("DELETE FROM buffer WHERE created_at < ?");
   const purgeProfileRows = db.prepare("DELETE FROM buffer WHERE profile = ?");
-  const deleteFlip = db.prepare("DELETE FROM flips WHERE profile = ?");
   const distinctProfiles = db.prepare("SELECT DISTINCT profile FROM buffer");
-
-  const upsertFlip = db.prepare(
-    `INSERT INTO flips(profile, buffered_only) VALUES(?, ?)
-       ON CONFLICT(profile) DO UPDATE SET buffered_only = excluded.buffered_only`
-  );
-  const selectFlip = db.prepare("SELECT buffered_only FROM flips WHERE profile = ?");
 
   function countOf(profile: string): number {
     const row = countRows.get(profile) as { n?: number } | undefined;
@@ -104,31 +88,8 @@ export function createBufferStore(db: DatabaseSync): BufferStore {
 
     count: countOf,
 
-    setBufferedOnly(profile, on) {
-      upsertFlip.run(profile, on ? 1 : 0);
-    },
-
-    isBufferedOnly(profile) {
-      const row = selectFlip.get(profile) as { buffered_only?: number } | undefined;
-      return Number(row?.buffered_only ?? 0) !== 0;
-    },
-
-    clearFlipIfEmpty(profile) {
-      return transaction(() => {
-        if (countOf(profile) > 0) {
-          return false;
-        }
-        upsertFlip.run(profile, 0);
-        return true;
-      });
-    },
-
     purgeProfile(profile) {
-      return transaction(() => {
-        const removed = Number(purgeProfileRows.run(profile).changes);
-        deleteFlip.run(profile);
-        return removed;
-      });
+      return Number(purgeProfileRows.run(profile).changes);
     },
 
     purgeOlderThan(maxAgeSeconds, nowSeconds = Math.floor(Date.now() / 1000)) {

@@ -21,8 +21,6 @@ export interface MediaMeta {
 export interface MediaPutResult {
   id: string;
   size: number;
-  /** Present when the store was given a URL builder (see `mediaUrl`). */
-  url?: string;
 }
 
 export interface MediaStore {
@@ -38,10 +36,11 @@ export interface MediaStore {
   ): MediaPutResult;
   get(id: string): { meta: MediaMeta; bytes: Buffer } | null;
   getMeta(id: string): MediaMeta | null;
-  delete(id: string): boolean;
   /** Deletes all metadata and files owned by one profile. */
   purgeProfile(profile: string): number;
   purgeOlderThan(retentionSeconds: number, nowSeconds?: number): number;
+  /** Every profile that still owns media, deduplicated. */
+  profiles(): string[];
 }
 
 export class MediaTooLargeError extends Error {
@@ -59,8 +58,6 @@ export class MediaTooLargeError extends Error {
 export interface MediaStoreOptions {
   dir: string;
   maxBytes: number;
-  /** Optional: makes `put` return a ready-to-embed public URL. */
-  urlFor?: (id: string) => string;
 }
 
 const ID_RE = /^[0-9a-f]{32}$/;
@@ -85,6 +82,7 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
   );
   const selectOne = db.prepare("SELECT * FROM media WHERE id = ?");
   const deleteOne = db.prepare("DELETE FROM media WHERE id = ?");
+  const distinctProfiles = db.prepare("SELECT DISTINCT profile FROM media");
   const selectExpired = db.prepare("SELECT id FROM media WHERE created_at < ?");
   const selectProfile = db.prepare("SELECT id FROM media WHERE profile = ?");
 
@@ -142,10 +140,7 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
         }
         throw err;
       }
-      const url = opts.urlFor?.(id);
-      return url === undefined
-        ? { id, size: bytes.byteLength }
-        : { id, size: bytes.byteLength, url };
+      return { id, size: bytes.byteLength };
     },
 
     getMeta(id) {
@@ -174,17 +169,6 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
       return { meta, bytes: readFileSync(path) };
     },
 
-    delete(id) {
-      if (!ID_RE.test(id)) {
-        return false;
-      }
-      const removed = Number(deleteOne.run(id).changes) > 0;
-      if (removed) {
-        unlink(id);
-      }
-      return removed;
-    },
-
     purgeProfile(profile) {
       const rows = selectProfile.all(profile) as Array<{ id?: unknown }>;
       let removed = 0;
@@ -196,6 +180,12 @@ export function createMediaStore(db: DatabaseSync, opts: MediaStoreOptions): Med
         unlink(id);
       }
       return removed;
+    },
+
+    profiles() {
+      return (distinctProfiles.all() as Array<{ profile?: string }>)
+        .map((row) => row.profile)
+        .filter((p): p is string => typeof p === "string");
     },
 
     purgeOlderThan(retentionSeconds, nowSeconds = Math.floor(Date.now() / 1000)) {

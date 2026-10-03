@@ -1,7 +1,7 @@
 /**
  * sqlite (Node 24 built-in `node:sqlite`) — the only durable state WhatRouter
- * keeps besides the Baileys auth files: the inbound buffer, the per-profile
- * "buffered only" flips, gateway-pushed policies and the media index.
+ * keeps besides the Baileys auth files: the inbound buffer, gateway-pushed
+ * policies and the media index.
  *
  * Migrations are idempotent and forward-only, tracked in `schema_version`.
  */
@@ -33,14 +33,12 @@ export interface OpenStoreOptions {
   mediaDir?: string;
   /** Hard cap enforced by `media.put`. Default: 25 MiB (the config default). */
   maxMediaBytes?: number;
-  /** Lets `media.put` return a public URL straight away. */
-  mediaUrlFor?: (id: string) => string;
 }
 
 export const DEFAULT_MAX_MEDIA_BYTES = 26_214_400;
 
 const MIGRATIONS: string[] = [
-  // 1: buffer + flips + policies + media
+  // 1: buffer + flips + policies + media (flips is dropped again in 2)
   `
   CREATE TABLE IF NOT EXISTS buffer (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +70,13 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS media_profile ON media(profile);
   CREATE INDEX IF NOT EXISTS media_created_at ON media(created_at);
+  `,
+
+  // 2: drop flips. The bit was written by going_idle and never read back: a new
+  // Session starts unable to deliver live anyway, and the pump only needed to
+  // know whether the buffer had drained.
+  `
+  DROP TABLE IF EXISTS flips;
   `,
 ];
 
@@ -119,7 +124,6 @@ export function openStore(path: string, opts: OpenStoreOptions = {}): Store {
   const media = createMediaStore(db, {
     dir: mediaDir,
     maxBytes: opts.maxMediaBytes ?? DEFAULT_MAX_MEDIA_BYTES,
-    ...(opts.mediaUrlFor === undefined ? {} : { urlFor: opts.mediaUrlFor }),
   });
 
   return {

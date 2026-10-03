@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WAMessage } from "@whiskeysockets/baileys";
-import { normalizeInbound, toUnixSeconds } from "../../src/whatsapp/normalize.js";
-import { BOT_IDS, BOT_LID, BOT_PN, fixture, silentLog } from "../helpers/wa.js";
+import { normalizeInbound, toNumber } from "../../src/whatsapp/normalize.js";
+import { BOT_IDS, BOT_PN, fixture, silentLog } from "../helpers/wa.js";
 
 const log = silentLog();
 
@@ -48,12 +48,9 @@ describe("normalizeInbound: direct messages", () => {
       senderName: "Alice",
       text: "Hello there",
       kind: "text",
-      timestamp: 1758000000,
       mentionsBot: false,
-      mentionedIds: [],
       quoted: null,
       media: null,
-      downloadFailed: false,
     });
   });
 
@@ -66,7 +63,6 @@ describe("normalizeInbound: direct messages", () => {
   it("extracts quote, mention and bot authorship", async () => {
     const m = await normalize("dm-extended-text-quote");
     expect(m?.text).toBe("@34600000099 what do you think about this?");
-    expect(m?.mentionedIds).toEqual([BOT_PN]);
     expect(m?.mentionsBot).toBe(true);
     expect(m?.quoted).toEqual({
       messageId: "BAE5F1B8C0DE0001",
@@ -110,25 +106,30 @@ describe("normalizeInbound: direct messages", () => {
 
 describe("normalizeInbound: groups", () => {
   it("canonicalizes a LID participant through participantAlt", async () => {
-    const m = await normalize("group-lid-participant", {
-      groupSubject: async () => "Weekend plans",
-    });
+    const m = await normalize("group-lid-participant");
     expect(m?.chatType).toBe("group");
     expect(m?.chatId).toBe("120363001234567890@g.us");
-    expect(m?.chatName).toBe("Weekend plans");
+    expect(m?.chatName).toBe("");
     expect(m?.senderId).toBe("34622222222@s.whatsapp.net");
     expect(m?.senderIdAlt).toBe("99988877766655@lid");
-    expect(m?.mentionedIds).toEqual([BOT_LID]);
     expect(m?.mentionsBot).toBe(true);
   });
 
-  it("falls back to the group digits when the subject is unknown", async () => {
+  it("leaves a group's name empty instead of spending a metadata request", async () => {
+    // Looking a subject up here would query WhatsApp about a group the router is
+    // about to drop; the router resolves the name once its gates have passed.
     const m = await normalize("group-lid-participant");
-    expect(m?.chatName).toBe("120363001234567890");
+    expect(m?.chatName).toBe("");
+  });
+
+  it("names a DM after its sender", async () => {
+    const m = await normalize("dm-conversation");
+    expect(m?.chatType).toBe("dm");
+    expect(m?.chatName).not.toBe("");
   });
 
   it("unwraps an ephemeral envelope", async () => {
-    const m = await normalize("ephemeral-text", { groupSubject: async () => "Weekend plans" });
+    const m = await normalize("ephemeral-text");
     expect(m?.kind).toBe("text");
     expect(m?.text).toBe("this one disappears in a week");
     expect(m?.senderId).toBe("34622222222@s.whatsapp.net");
@@ -136,20 +137,41 @@ describe("normalizeInbound: groups", () => {
 });
 
 describe("normalizeInbound: media", () => {
-  it("downloads an image and keeps the caption", async () => {
+  it("describes an image and keeps the caption, without downloading it", async () => {
     const bytes = new Uint8Array([1, 2, 3, 4]);
-    const download = vi.fn(async () => bytes);
+    const download = vi.fn(async (_msg: unknown, _maxBytes: number) => bytes);
     const m = await normalize("image-caption", { download });
-    expect(download).toHaveBeenCalledOnce();
     expect(m?.kind).toBe("image");
     expect(m?.text).toBe("look at this sunset");
-    expect(m?.media).toEqual({
+    expect(m?.media).toMatchObject({
       kind: "image",
       mime: "image/jpeg",
-      bytes,
-      size: 4,
       caption: "look at this sunset",
     });
+    // `fileLength` arrives as a decimal string in the proto.
+    expect(m?.media?.declaredSize).toBe(24680);
+    // Nothing was fetched: the router decides whether to spend the download.
+    expect(download).not.toHaveBeenCalled();
+    expect(await m?.media?.download(4096)).toEqual(bytes);
+    expect(download).toHaveBeenCalledOnce();
+  });
+
+  it("passes the caller's cap through to the download", async () => {
+    const download = vi.fn(async (_msg: unknown, maxBytes: number) => new Uint8Array(maxBytes));
+    const m = await normalize("image-caption", { download });
+    expect((await m?.media?.download(64))?.byteLength).toBe(64);
+    expect(download).toHaveBeenCalledWith(expect.anything(), 64);
+  });
+
+  it("reports no declared size when the proto omits one", async () => {
+    const m = await normalizeInbound(
+      {
+        key: { remoteJid: "34600000001@s.whatsapp.net", id: "x", fromMe: false },
+        message: { imageMessage: { url: "https://mmg.whatsapp.net/v/t62/x.enc" } },
+      } as unknown as WAMessage,
+      { botIds: BOT_IDS, log, download: async () => new Uint8Array(1) }
+    );
+    expect(m?.media?.declaredSize).toBeNull();
   });
 
   it("marks a ptt audio as a voice note", async () => {
@@ -178,19 +200,19 @@ describe("normalizeInbound: media", () => {
   it("leaves media null when no downloader is wired up", async () => {
     const m = await normalize("image-caption");
     expect(m?.media).toBeNull();
-    expect(m?.downloadFailed).toBe(false);
   });
 
-  it("delivers the message with a note when the download fails", async () => {
+  it("lets a download failure reach the router instead of swallowing it", async () => {
     const m = await normalize("image-caption", {
       download: async () => {
         throw new Error("410 gone");
       },
     });
     expect(m).not.toBeNull();
-    expect(m?.media).toBeNull();
-    expect(m?.downloadFailed).toBe(true);
-    expect(m?.text).toBe("look at this sunset\n[image could not be downloaded]");
+    // Normalization no longer knows the cap, so the note is the router's job.
+    expect(m?.media).not.toBeNull();
+    expect(m?.text).toBe("look at this sunset");
+    await expect(m?.media?.download(4096)).rejects.toThrow("410 gone");
   });
 });
 
@@ -233,11 +255,12 @@ describe("normalizeInbound: cards", () => {
   });
 });
 
-describe("toUnixSeconds", () => {
+describe("toNumber", () => {
   it("accepts numbers, strings and Long-shaped values", () => {
-    expect(toUnixSeconds(1758000000)).toBe(1758000000);
-    expect(toUnixSeconds("1758000000")).toBe(1758000000);
-    expect(toUnixSeconds({ low: 1758000000, high: 0, unsigned: false })).toBe(1758000000);
-    expect(toUnixSeconds({ toNumber: () => 1758000001 })).toBe(1758000001);
+    expect(toNumber(1758000000)).toBe(1758000000);
+    expect(toNumber("1758000000")).toBe(1758000000);
+    expect(toNumber({ low: 1758000000, high: 0, unsigned: false })).toBe(1758000000);
+    expect(toNumber({ toNumber: () => 1758000001 })).toBe(1758000001);
+    expect(toNumber({ unusable: true })).toBeNull();
   });
 });

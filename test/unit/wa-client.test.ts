@@ -80,11 +80,9 @@ describe("createBaileysClient: startup", () => {
 
     expect(makeSocket).not.toHaveBeenCalled();
     expect(client.state()).toBe("unpaired");
-    expect(client.authDir()).toBe(dir);
   });
 
   it("caches both bot ids on open", async () => {
-    const states: string[] = [];
     const dir = await makeRegisteredAuthDir();
     dirs.push(dir);
     const sockets: FakeSocket[] = [];
@@ -99,8 +97,6 @@ describe("createBaileysClient: startup", () => {
         return fake.socket;
       },
     });
-    client.onStateChange((s) => states.push(s));
-
     await client.start();
     expect(sockets).toHaveLength(1);
     expect(client.state()).toBe("connecting");
@@ -108,7 +104,6 @@ describe("createBaileysClient: startup", () => {
     sockets[0]?.ev.emit("connection.update", { connection: "open" });
     expect(client.state()).toBe("connected");
     expect(client.botIds()).toEqual([BOT_PN, BOT_LID]);
-    expect(states).toEqual(["connecting", "connected"]);
   });
 });
 

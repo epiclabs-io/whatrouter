@@ -5,6 +5,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { parseBearer } from "../relay/auth.js";
 import { secretMatches } from "../management/auth.js";
+import type { Config } from "../config/schema.js";
 import type { Logger } from "../util/log.js";
 import { createMcpServer, type McpToolOptions } from "./tools.js";
 
@@ -58,7 +59,16 @@ function ownOrigin(req: IncomingMessage): string | null {
   }
 }
 
-export function createMcpEndpoint(opts: McpToolOptions & { log: Logger }): McpEndpoint {
+export interface McpEndpointOptions extends McpToolOptions {
+  log: Logger;
+  /**
+   * `management`, captured at boot. `null` means `/mcp` does not exist, so the
+   * route answers 404 instead of asking for a secret nobody can present.
+   */
+  management: Config["management"];
+}
+
+export function createMcpEndpoint(opts: McpEndpointOptions): McpEndpoint {
   const sessions = new Map<string, SessionEntry>();
   const initializing = new Set<InitializingEntry>();
   let closed = false;
@@ -114,7 +124,7 @@ export function createMcpEndpoint(opts: McpToolOptions & { log: Logger }): McpEn
         json(res, 503, { error: "shutting down" });
         return;
       }
-      const management = opts.getConfig().management;
+      const management = opts.management;
       if (management === null) {
         json(res, 404, { error: "not found" });
         req.resume();

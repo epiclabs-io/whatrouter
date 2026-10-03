@@ -40,17 +40,12 @@ async function locked<T>(path: string, operation: () => Promise<T>): Promise<T> 
   }
 }
 
-function formattedIdentity(raw: string): string | null {
-  const formatted = formatUserIdentity(raw);
-  return formatted;
-}
-
 function formatIdentityAt(map: YAMLMap, key: string): void {
   const value = map.get(key, true);
   if (!isScalar(value) || typeof value.value !== "string") {
     return;
   }
-  const formatted = formattedIdentity(value.value);
+  const formatted = formatUserIdentity(value.value);
   if (formatted !== null) {
     value.value = formatted;
     value.type = Scalar.QUOTE_DOUBLE;
@@ -62,7 +57,7 @@ function formatIdentityList(sequence: YAMLSeq): void {
     if (!isScalar(value) || typeof value.value !== "string" || value.value.trim() === "*") {
       return;
     }
-    const formatted = formattedIdentity(value.value);
+    const formatted = formatUserIdentity(value.value);
     if (formatted !== null) {
       value.value = formatted;
       value.type = Scalar.QUOTE_DOUBLE;
@@ -157,19 +152,16 @@ export class ConfigStore {
     return store;
   }
 
-  get current(): Config {
-    if (this.#current === null) {
-      throw new Error("ConfigStore has not been loaded");
-    }
-    return this.#current;
-  }
-
   get warnings(): readonly Issue[] {
     return this.#warnings;
   }
 
+  /** The live config. A new object identity means the document changed. */
   get(): Config {
-    return this.current;
+    if (this.#current === null) {
+      throw new Error("ConfigStore has not been loaded");
+    }
+    return this.#current;
   }
 
   async reload(): Promise<Config> {

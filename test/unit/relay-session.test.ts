@@ -191,13 +191,12 @@ describe("live delivery", () => {
 });
 
 describe("going_idle", () => {
-  it("flips durably before acking and buffers afterwards", async () => {
+  it("stops live delivery before acking and buffers afterwards", async () => {
     const h = harness();
     await h.session.handleFrame(hello);
     expect(h.session.liveOk).toBe(true);
 
     await h.session.handleFrame({ type: "going_idle" });
-    expect(h.store.buffer.isBufferedOnly("work")).toBe(true);
     expect(h.sent.at(-1)).toEqual({ type: "going_idle_ack" });
     expect(h.session.idleFlipped).toBe(true);
     expect(h.session.liveOk).toBe(false);
@@ -208,14 +207,14 @@ describe("going_idle", () => {
     expect(h.store.buffer.count("work")).toBe(2);
   });
 
-  it("is cleared by a drain on the next session", async () => {
+  it("is forgotten by the next session, which drains to live", async () => {
     const h = harness();
     await h.session.handleFrame(hello);
     await h.session.handleFrame({ type: "going_idle" });
     h.session.deliver(testEvent("queued"));
     h.session.close();
 
-    // A fresh session over the same store: the durable flip must not block the drain.
+    // A fresh session over the same store drains the backlog and goes live again.
     const sent: ConnectorFrame[] = [];
     const next = new Session({
       profile: "work",
@@ -231,7 +230,7 @@ describe("going_idle", () => {
     expect(replayed[0]?.bufferId).toBe(String(next.pending));
 
     await next.handleFrame({ type: "inbound_ack", bufferId: replayed[0]?.bufferId ?? "" });
-    expect(h.store.buffer.isBufferedOnly("work")).toBe(false);
+    expect(h.store.buffer.count("work")).toBe(0);
     expect(next.liveOk).toBe(true);
   });
 });

@@ -74,7 +74,6 @@ describe("toRelayEvent", () => {
       text: "look at this",
       kind: "image",
       mentionsBot: true,
-      mentionedIds: ["1000@s.whatsapp.net"],
       quoted: {
         messageId: "wa-6",
         text: "previous",
@@ -84,8 +83,8 @@ describe("toRelayEvent", () => {
       media: {
         kind: "image",
         mime: "image/jpeg",
-        bytes: new Uint8Array([1, 2, 3, 4]),
-        size: 4,
+        declaredSize: 4,
+        download: async () => new Uint8Array([1, 2, 3, 4]),
         filename: "photo.jpg",
         caption: "look at this",
       },

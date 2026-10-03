@@ -6,13 +6,12 @@ import { parseArgs } from "node:util";
 import { loadConfigFile } from "./config/load.js";
 import { ConfigStore } from "./config/store.js";
 import { ConfigError, relayUrl, type Config, type Issue } from "./config/schema.js";
+import { EXIT_CONFIG, EXIT_OK } from "./exit-codes.js";
 import { runServe } from "./serve.js";
 import { createLogger } from "./util/log.js";
 import { runPair } from "./whatsapp/pair.js";
 
-export const EXIT_OK = 0;
-export const EXIT_FAILURE = 1;
-export const EXIT_CONFIG = 2;
+export { EXIT_CONFIG, EXIT_FAILURE, EXIT_OK } from "./exit-codes.js";
 
 export interface CliIo {
   out(line: string): void;
@@ -77,7 +76,7 @@ function summarize(io: CliIo, path: string, config: Config): void {
   io.out(`listen: ${config.listen.host}:${config.listen.port}`);
   io.out(`public_url: ${config.publicUrl ?? "(none)"}`);
   io.out(`data_dir: ${config.dataDir}`);
-  io.out(`default_profile: ${config.defaultProfile ?? "(none, unrouted chats are dropped)"}`);
+  io.out(`default_profile: ${config.defaultProfile ?? "(none, unrouted DMs are dropped)"}`);
   io.out(`profiles: ${config.profiles.length} (${routeCount} routes)`);
   for (const profile of config.profiles) {
     const dms = profile.routes.filter((r) => r.kind === "dm").length;
@@ -126,7 +125,7 @@ export async function run(argv: string[], io: CliIo = processIo): Promise<number
         const configStore = await ConfigStore.load(path);
         reportIssues(io, "warning", [...configStore.warnings]);
         return await runServe({
-          config: configStore.get(),
+          getConfig: () => configStore.get(),
           configStore,
           log: createLogger({ level: configStore.get().logLevel, name: "whatrouter" }),
           io,

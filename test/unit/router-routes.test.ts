@@ -12,6 +12,7 @@ import {
   BOB,
   CAROL,
   GROUP,
+  ROGUE,
   dmRoute,
   groupRoute,
   inbound,
@@ -91,6 +92,22 @@ describe("resolveProfile", () => {
     expect(match?.route).toBeNull();
   });
 
+  it("does not extend default_profile to an unrouted group", () => {
+    const config = routerConfig({ defaultProfile: "b" });
+    const table = buildRouteTable(config);
+    // A group no profile claims: it belongs to everyone, so handing it to the
+    // default profile would answer people nobody routed here.
+    const m = inbound({ chatId: ROGUE, chatType: "group", senderId: CAROL });
+    expect(resolveProfile(table, config, m)).toBeNull();
+  });
+
+  it("still routes a group that a profile claims, with default_profile set", () => {
+    const config = routerConfig({ defaultProfile: "b" });
+    const table = buildRouteTable(config);
+    const m = inbound({ chatId: GROUP, chatType: "group", senderId: ALICE });
+    expect(resolveProfile(table, config, m)?.profile.name).toBe("a");
+  });
+
   it("returns null for an unrouted chat when there is no default profile", () => {
     const config = routerConfig();
     const table = buildRouteTable(config);
@@ -102,49 +119,49 @@ describe("isRoutedTo", () => {
   it("allows the owning profile and refuses every other one", () => {
     const config = routerConfig();
     const table = buildRouteTable(config);
-    expect(isRoutedTo(table, config, "a", ALICE)).toBe(true);
-    expect(isRoutedTo(table, config, "b", ALICE)).toBe(false);
-    expect(isRoutedTo(table, config, "a", GROUP)).toBe(true);
-    expect(isRoutedTo(table, config, "b", GROUP)).toBe(false);
-    expect(isRoutedTo(table, config, "a", BOB)).toBe(false);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "a", ALICE)).toBe(true);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "b", ALICE)).toBe(false);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "a", GROUP)).toBe(true);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "b", GROUP)).toBe(false);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "a", BOB)).toBe(false);
   });
 
   it("accepts the same chat written in other forms", () => {
     const config = routerConfig();
     const table = buildRouteTable(config);
-    expect(isRoutedTo(table, config, "a", "+34600000001")).toBe(true);
-    expect(isRoutedTo(table, config, "a", "34600000001@c.us")).toBe(true);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "a", "+34600000001")).toBe(true);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "a", "34600000001@c.us")).toBe(true);
   });
 
   it("refuses an unrouted chat, and an empty chat id", () => {
     const config = routerConfig();
     const table = buildRouteTable(config);
-    expect(isRoutedTo(table, config, "a", CAROL)).toBe(false);
-    expect(isRoutedTo(table, config, "a", "")).toBe(false);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "a", CAROL)).toBe(false);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "a", "")).toBe(false);
   });
 
   it("lets a profile reply to a chat it actually received (default_profile case)", () => {
     const config = routerConfig({ defaultProfile: "b" });
     const table = buildRouteTable(config);
-    expect(isRoutedTo(table, config, "b", CAROL)).toBe(false);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "b", CAROL)).toBe(false);
     table.remember(CAROL, "b");
-    expect(isRoutedTo(table, config, "b", CAROL)).toBe(true);
-    expect(isRoutedTo(table, config, "a", CAROL)).toBe(false);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "b", CAROL)).toBe(true);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "a", CAROL)).toBe(false);
   });
 
   it("never lets the memory override an explicit route", () => {
     const config = routerConfig();
     const table = buildRouteTable(config);
     table.remember(ALICE, "b");
-    expect(isRoutedTo(table, config, "b", ALICE)).toBe(false);
-    expect(isRoutedTo(table, config, "a", ALICE)).toBe(true);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "b", ALICE)).toBe(false);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "a", ALICE)).toBe(true);
   });
 
   it("allow_unrouted_outbound turns the tenant check off", () => {
     const config = routerConfig({ allowUnroutedOutbound: true });
     const table = buildRouteTable(config);
-    expect(isRoutedTo(table, config, "b", ALICE)).toBe(true);
-    expect(isRoutedTo(table, config, "b", CAROL)).toBe(true);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "b", ALICE)).toBe(true);
+    expect(isRoutedTo(table, config.allowUnroutedOutbound, "b", CAROL)).toBe(true);
   });
 
   it("bounds the delivered-chat memory", () => {
@@ -153,9 +170,10 @@ describe("isRoutedTo", () => {
     for (let i = 0; i < DELIVERED_MEMORY_MAX + 50; i++) {
       table.remember(`3460000${String(i).padStart(4, "0")}@s.whatsapp.net`, "a");
     }
-    expect(table.rememberedSize).toBe(DELIVERED_MEMORY_MAX);
-    // The newest entries survive, the oldest are evicted.
-    expect(table.rememberedProfile("34600001049@s.whatsapp.net")).toBe("a");
+    // Only the newest DELIVERED_MEMORY_MAX survive, so of the 50 extra the
+    // oldest remembered entry is the 51st written.
+    expect(table.rememberedProfile("34600000050@s.whatsapp.net")).toBe("a");
+    expect(table.rememberedProfile("34600000049@s.whatsapp.net")).toBeUndefined();
     expect(table.rememberedProfile("34600000000@s.whatsapp.net")).toBeUndefined();
   });
 });

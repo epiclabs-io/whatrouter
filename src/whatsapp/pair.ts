@@ -8,11 +8,9 @@
 import qrcodeTerminal from "qrcode-terminal";
 import {
   DisconnectReason,
-  fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
   type ConnectionState,
-  type WAVersion,
 } from "@whiskeysockets/baileys";
 import type { CliIo } from "../cli.js";
 import type { Config } from "../config/schema.js";
@@ -21,11 +19,11 @@ import {
   authDirFor,
   defaultMakeSocket,
   disconnectStatus,
-  VERSION_FETCH_TIMEOUT_MS,
   type MakeSocket,
   type SocketLike,
 } from "./baileys-client.js";
 import { digitsOf, normalizeJid } from "./jid.js";
+import { resolveVersion } from "./resolve-version.js";
 
 /** `34600000099:12@s.whatsapp.net` -> `34600000099` (the `:device` suffix is noise). */
 function accountDigits(jid: string): string {
@@ -52,28 +50,6 @@ function formatPairingCode(code: string): string {
   const clean = code.replace(/[^A-Za-z0-9]/g, "");
   return clean.length === 8 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : code;
 }
-
-async function resolveVersion(enabled: boolean, log: Logger): Promise<WAVersion | undefined> {
-  if (!enabled) {
-    return undefined;
-  }
-  try {
-    const timeout = new Promise<null>((resolve) => {
-      const timer = setTimeout(() => resolve(null), VERSION_FETCH_TIMEOUT_MS);
-      timer.unref?.();
-    });
-    const result = await Promise.race([fetchLatestBaileysVersion(), timeout]);
-    if (result === null) {
-      log.warn("whatsapp version lookup timed out; using the bundled version");
-      return undefined;
-    }
-    return result.version;
-  } catch (err) {
-    log.warn({ err }, "whatsapp version lookup failed; using the bundled version");
-    return undefined;
-  }
-}
-
 export async function runPair(opts: PairOptions): Promise<number> {
   const { config, io, log } = opts;
   const makeSocket = opts.makeSocket ?? defaultMakeSocket;

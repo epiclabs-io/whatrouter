@@ -1,19 +1,15 @@
 /**
  * Per-profile relay session: a pure state machine over the NDJSON frames.
- * No sockets, no timers, no I/O beyond the store — the server owns the
- * WebSocket and just hands frames in and gets frames out, which is what makes
- * the delivery semantics unit-testable.
+ * No sockets, no timers, no I/O beyond the store - the server owns the
+ * WebSocket and hands frames in and gets frames out, making the delivery
+ * semantics unit-testable.
  *
- * Delivery rules (docs/DESIGN.md §"Buffer / delivery state machine"):
- *   live  <=> hello seen ∧ ¬idle_flipped ∧ no in-flight bufferId ∧ buffer empty
- *   else  -> append to the durable buffer and pump
- *   pump  -> send the oldest unacked row with `bufferId`, wait for its
- *            `inbound_ack`, delete it, repeat; on empty clear the durable flip
- *            and go live.
- *
- * `idleFlipped` starts false on every new session: the durable flip only gates
- * *live* delivery, so a reconnect after `going_idle` still drains the buffer
- * (and clearing it on drain is what re-enables live delivery).
+ * A new session buffers until `hello` arrives and the durable buffer has
+ * drained or been confirmed empty. The pump sends the oldest unacknowledged row
+ * with a `bufferId`, waits for its matching `inbound_ack`, deletes it, and
+ * repeats. Once drained, new events are delivered live while no row is awaiting
+ * acknowledgement. `going_idle` disables live delivery for the rest of that
+ * session; a reconnect creates a fresh session that drains the durable buffer.
  */
 import type { Logger } from "../util/log.js";
 import type { Store } from "../store/db.js";
@@ -176,9 +172,8 @@ export class Session {
   }
 
   #onGoingIdle(): void {
-    // Durable first: if we crash between the flip and the ack, we over-buffer
-    // (safe) instead of delivering into a gateway that has gone away (lossy).
-    this.#deps.store.buffer.setBufferedOnly(this.#deps.profile, true);
+    // In memory only, and never cleared: this session does not deliver live
+    // again. The next handshake builds a new Session, which starts the same way.
     this.#idleFlipped = true;
     this.#liveOk = false;
     this.#deps.send({ type: "going_idle_ack" });
@@ -239,7 +234,7 @@ export class Session {
         this.#deps.send({ type: "inbound", event: next.event, bufferId: String(next.seq) });
         return;
       }
-      if (this.#deps.store.buffer.clearFlipIfEmpty(this.#deps.profile)) {
+      if (this.#deps.store.buffer.count(this.#deps.profile) === 0) {
         this.#liveOk = true;
         return;
       }
