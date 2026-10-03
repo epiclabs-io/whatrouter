@@ -17,6 +17,8 @@ export interface PolicyStore {
   set(profile: string, policy: unknown, nowSeconds?: number): RelayPolicy;
   get(profile: string): RelayPolicy | null;
   delete(profile: string): boolean;
+  /** Every profile that still has a policy, deduplicated. */
+  profiles(): string[];
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -71,6 +73,7 @@ export function createPolicyStore(db: DatabaseSync): PolicyStore {
   );
   const select = db.prepare("SELECT policy FROM policies WHERE profile = ?");
   const remove = db.prepare("DELETE FROM policies WHERE profile = ?");
+  const distinctProfiles = db.prepare("SELECT DISTINCT profile FROM policies");
 
   return {
     set(profile, policy, nowSeconds = Math.floor(Date.now() / 1000)) {
@@ -93,6 +96,12 @@ export function createPolicyStore(db: DatabaseSync): PolicyStore {
 
     delete(profile) {
       return Number(remove.run(profile).changes) > 0;
+    },
+
+    profiles() {
+      return (distinctProfiles.all() as Array<{ profile?: string }>)
+        .map((row) => row.profile)
+        .filter((p): p is string => typeof p === "string");
     },
   };
 }

@@ -5,14 +5,15 @@
  * Everything a Hermes operator can get wrong is in here: cross-talk between
  * profiles, unrouted chats, mention gating, media scoping and the tenant check.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { makeToken } from "../../src/relay/auth.js";
 import { LineAssembler } from "../../src/relay/ndjson.js";
 import { startServe, inboundFromDebugBody, type ServeHandle } from "../../src/serve.js";
+import { openStoreFromConfig } from "../../src/store/db.js";
 import { mediaIdFromUrl } from "../../src/router/router.js";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
 import type { RelayEvent } from "../../src/relay/frames.js";
@@ -523,6 +524,95 @@ describe("serve: default_profile is a DM-only fallback", () => {
     );
     expect((frame["event"] as RelayEvent).source.chat_id).toBe(CAROL);
     b.close();
+  });
+});
+
+describe("serve: startup reconciliation", () => {
+  let handle: ServeHandle;
+  let dataDir: string;
+
+  afterEach(async () => {
+    await handle?.close();
+    handle = undefined as unknown as ServeHandle;
+  });
+
+  afterAll(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("drops state for a profile the config no longer has, and keeps the real one", async () => {
+    dataDir = mkdtempSync(join(tmpdir(), "whatrouter-serve-reconcile-"));
+    const config = serveConfig(dataDir);
+    const store = openStoreFromConfig(config);
+    try {
+      // A renamed-by-hand profile: rows in all three tables, plus a file.
+      store.buffer.append("ghost", {
+        text: "queued for someone else",
+        message_type: "text",
+        message_id: "ghost-1",
+        reply_to_message_id: null,
+        source: {
+          platform: "whatsapp",
+          chat_id: "34600000001@s.whatsapp.net",
+          chat_type: "dm",
+          chat_name: "Alice",
+          user_id: "34600000001@s.whatsapp.net",
+          user_name: "Alice",
+          thread_id: null,
+          chat_topic: null,
+          message_id: "ghost-1",
+        },
+      });
+      store.buffer.setBufferedOnly("ghost", true);
+      store.policy.set("ghost", { requireAddress: false });
+      const ghostMedia = store.media.put("ghost", Buffer.from("ghost"), "text/plain");
+
+      // The same, for a profile that is still configured: must survive.
+      store.buffer.append("a", {
+        text: "still wanted",
+        message_type: "text",
+        message_id: "real-1",
+        reply_to_message_id: null,
+        source: {
+          platform: "whatsapp",
+          chat_id: "34600000001@s.whatsapp.net",
+          chat_type: "dm",
+          chat_name: "Alice",
+          user_id: "34600000001@s.whatsapp.net",
+          user_name: "Alice",
+          thread_id: null,
+          chat_topic: null,
+          message_id: "real-1",
+        },
+      });
+      store.policy.set("a", { requireAddress: true });
+      const realMedia = store.media.put("a", Buffer.from("real"), "text/plain");
+
+      const started = await startServe({
+        config,
+        log: silentLogger(),
+        io,
+        fake: true,
+        signals: false,
+      });
+      if (!started.ok) {
+        throw new Error(`startServe failed with code ${started.code}`);
+      }
+      handle = started.handle;
+
+      expect(store.buffer.count("ghost")).toBe(0);
+      expect(store.buffer.isBufferedOnly("ghost")).toBe(false);
+      expect(store.policy.get("ghost")).toBeNull();
+      expect(store.media.getMeta(ghostMedia.id)).toBeNull();
+      expect(existsSync(join(dataDir, "media", ghostMedia.id))).toBe(false);
+
+      expect(store.buffer.count("a")).toBe(1);
+      expect(store.policy.get("a")).toEqual({ requireAddress: true });
+      expect(store.media.getMeta(realMedia.id)).not.toBeNull();
+      expect(existsSync(join(dataDir, "media", realMedia.id))).toBe(true);
+    } finally {
+      store.close();
+    }
   });
 });
 
