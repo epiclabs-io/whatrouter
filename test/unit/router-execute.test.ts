@@ -732,7 +732,7 @@ describe("onInbound", () => {
     expect(metadata).not.toHaveBeenCalled();
   });
 
-  it("takes a subject from WhatsApp once and reuses it for five minutes", async () => {
+  it("asks the port for the subject on every message, so a rename shows up", async () => {
     const wa = createFakeWhatsAppPort();
     h.store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -742,26 +742,18 @@ describe("onInbound", () => {
     const metadata = vi
       .spyOn(wa, "getGroupMetadata")
       .mockResolvedValue(groupMeta(GROUP, "Weekend plans"));
-    const start = 1_758_000_000_000;
-    const now = vi.spyOn(Date, "now").mockReturnValue(start);
 
     await h.router.onInbound(groupMention());
     expect(metadata).toHaveBeenCalledExactlyOnceWith(GROUP);
     expect(h.delivered[0]?.event.source.chat_name).toBe("Weekend plans");
 
-    // A second message in the same five minutes does not ask WhatsApp again.
+    // Caching is the port's job, so the router asks again every time — and
+    // picks up a rename instead of serving a stale name for five minutes.
     h.delivered.length = 0;
-    now.mockReturnValue(start + 4 * 60_000);
-    await h.router.onInbound(groupMention());
-    expect(metadata).toHaveBeenCalledOnce();
-    expect(h.delivered[0]?.event.source.chat_name).toBe("Weekend plans");
-
-    // Once the entry is stale the subject is worth asking for again.
-    h.delivered.length = 0;
-    now.mockReturnValue(start + 5 * 60_000 + 1);
+    metadata.mockResolvedValue(groupMeta(GROUP, "Weekend plans (moved)"));
     await h.router.onInbound(groupMention());
     expect(metadata).toHaveBeenCalledTimes(2);
-    expect(h.delivered[0]?.event.source.chat_name).toBe("Weekend plans");
+    expect(h.delivered[0]?.event.source.chat_name).toBe("Weekend plans (moved)");
   });
 
   it("falls back to the group's digits when there is no subject", async () => {

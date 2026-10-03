@@ -35,9 +35,6 @@ import {
 import { digitsOf } from "../whatsapp/jid.js";
 import type { InboundMessage, OutboundMedia, WhatsAppPort } from "../whatsapp/port.js";
 
-/** How long a group's WhatsApp subject stays good enough to reuse. */
-const GROUP_NAME_TTL_MS = 5 * 60_000;
-
 /** The slice of the relay server the router needs (kept narrow for tests and wiring). */
 export interface RelayDeliverer {
   deliver(profileName: string, event: RelayEvent): DeliveryOutcome;
@@ -118,9 +115,6 @@ export function createRouter(opts: RouterOptions): Router {
   }
 
   // ------------------------------------------------------------------ inbound
-
-  /** Group subject by id, with the time we asked for it. */
-  const groupNames = new Map<string, { subject: string; at: number }>();
 
   /** The attachment re-hosted, plus the body text after any media note. */
   interface InboundBody {
@@ -221,17 +215,13 @@ export function createRouter(opts: RouterOptions): Router {
       return m.chatName;
     }
     const digits = digitsOf(groupId);
-    const cached = groupNames.get(groupId);
-    if (cached !== undefined && Date.now() - cached.at < GROUP_NAME_TTL_MS) {
-      return cached.subject === "" ? digits : cached.subject;
-    }
     try {
+      // Every message asks the port. Caching a group's subject is the port's
+      // job: it holds the cache for five minutes and drops it when WhatsApp
+      // reports a rename, which a cache here would not hear about.
       const subject = (await whatsapp.getGroupMetadata(groupId)).subject.trim();
-      groupNames.set(groupId, { subject, at: Date.now() });
       return subject === "" ? digits : subject;
     } catch (err: unknown) {
-      // Deliberately not cached: a failed lookup is usually transient, and a
-      // group that just came back deserves to be asked about again.
       log.debug(
         { chatId: groupId, err: errorMessage(err) },
         "group subject lookup failed; using the group id"
