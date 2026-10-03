@@ -439,6 +439,80 @@ profiles:
     }
   });
 
+  it("clears default_profile when its profile is deleted instead of promoting one", async () => {
+    // Three profiles, so there is someone left to promote under the old rule.
+    for (const name of ["alpha", "bravo"]) {
+      expect(
+        (await client.callTool({ name: "create_profile", arguments: { name } })).isError
+      ).not.toBe(true);
+    }
+    const updated = await configStore.mutate((doc) => {
+      doc.set("default_profile", "bravo");
+    });
+    expect(updated.defaultProfile).toBe("bravo");
+
+    const deleted = await client.callTool({
+      name: "delete_profile",
+      arguments: { name: "bravo" },
+    });
+    expect(deleted.isError).not.toBe(true);
+    const result = deleted.structuredContent as {
+      result: {
+        name: string;
+        deleted: boolean;
+        defaultProfile: string | null;
+        warnings?: Array<{ path: string; message: string }>;
+      };
+    };
+    expect(result.result).toEqual({
+      name: "bravo",
+      deleted: true,
+      defaultProfile: null,
+      warnings: [
+        {
+          path: "default_profile",
+          message: "default_profile cleared; unrouted DMs are now dropped",
+        },
+      ],
+    });
+    // Nobody was promoted: alpha is still not receiving anyone else's DMs.
+    expect(configStore.get().defaultProfile).toBeNull();
+    expect(
+      (deleted.content as Array<{ type: string; text: string }>).some((block) =>
+        block.text.includes("unrouted DMs are now dropped")
+      )
+    ).toBe(true);
+  });
+
+  it("leaves default_profile alone when a different profile is deleted", async () => {
+    for (const name of ["charlie", "delta"]) {
+      expect(
+        (await client.callTool({ name: "create_profile", arguments: { name } })).isError
+      ).not.toBe(true);
+    }
+    await configStore.mutate((doc) => {
+      doc.set("default_profile", "charlie");
+    });
+
+    const deleted = await client.callTool({
+      name: "delete_profile",
+      arguments: { name: "delta" },
+    });
+    expect(deleted.isError).not.toBe(true);
+    const result = deleted.structuredContent as {
+      result: {
+        name: string;
+        deleted: boolean;
+        defaultProfile: string | null;
+        warnings?: unknown;
+      };
+    };
+    // No warning: nothing about the default changed.
+    expect(result.result).toEqual({ name: "delta", deleted: true, defaultProfile: "charlie" });
+    expect(result.result.warnings).toBeUndefined();
+    expect(configStore.get().defaultProfile).toBe("charlie");
+  });
+
   it("purges profile runtime state before allowing delete and same-name recreation", async () => {
     const created = await client.callTool({
       name: "create_profile",

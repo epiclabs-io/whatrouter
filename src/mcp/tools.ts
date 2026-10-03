@@ -632,11 +632,12 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
   );
   tool(
     "delete_profile",
-    "Delete a relay profile after closing its live session.",
+    "Delete a relay profile after closing its live session. If the deleted profile was the " +
+      "default_profile, the default is cleared rather than moved to another profile, so " +
+      "unrouted DMs are dropped until a default is set again.",
     { name: z.string().min(1) },
     destructiveConfigWrite,
     async ({ name }) => {
-      let fallback: string | null = null;
       let wasDefault = false;
       const config = await opts.configStore?.mutate(
         (doc) => {
@@ -647,11 +648,13 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
           if (names.length === 1) {
             throw new Error("cannot delete the last profile");
           }
-          fallback = names.find((candidate) => candidate !== name) ?? null;
           wasDefault = doc.get("default_profile") === name;
           doc.deleteIn(["profiles", name]);
           if (wasDefault) {
-            doc.set("default_profile", fallback);
+            // Cleared, not handed to whoever happens to be left: promoting an
+            // arbitrary profile would silently start delivering another agent's
+            // DMs to the survivor (D4).
+            doc.set("default_profile", null);
           }
         },
         () => opts.removeProfile(name)
@@ -661,14 +664,19 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
           "configuration mutation is unavailable: no writable ConfigStore was provided"
         );
       }
-      return reply(
-        {
-          name,
-          deleted: true,
-          defaultProfile: config.defaultProfile,
-        },
-        `Deleted profile ${name}`
-      );
+      const result = {
+        name,
+        deleted: true,
+        defaultProfile: config.defaultProfile,
+      };
+      return wasDefault
+        ? warningReply(result, `Deleted profile ${name}`, [
+            {
+              path: "default_profile",
+              message: "default_profile cleared; unrouted DMs are now dropped",
+            },
+          ])
+        : reply(result, `Deleted profile ${name}`);
     }
   );
   tool(
