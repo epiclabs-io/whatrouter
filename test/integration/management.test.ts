@@ -17,7 +17,7 @@ import { LineAssembler } from "../../src/relay/ndjson.js";
 import { createRelayServer, HOLD_MS, type RelayServer } from "../../src/relay/server.js";
 import { openStore, type Store } from "../../src/store/db.js";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
-import { delay, testConfig, testEvent, testProfile } from "../helpers/relay.js";
+import { bootSettings, delay, testConfig, testEvent, testProfile } from "../helpers/relay.js";
 
 const MGMT_SECRET = "management-secret-0123456789abcdef-xyz";
 const WORK = testProfile("work", { wakeUrl: "http://wake.invalid/work" });
@@ -179,7 +179,8 @@ async function startServer(overrides: Partial<Config> = {}): Promise<Fixture> {
   const clock = { ms: START_MS };
   const timers: Fixture["timers"] = [];
   const server = createRelayServer({
-    config,
+    getConfig: () => config,
+    ...bootSettings(config),
     store,
     log: pino({ level: "trace" }, sink),
     execute: async () => ({ success: true, message_id: "wa-out-1" }),

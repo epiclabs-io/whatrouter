@@ -16,6 +16,7 @@ import { createRequire } from "node:module";
 import { ConfigStore } from "./config/store.js";
 import { createRouter, type RelayDeliverer, type Router } from "./router/router.js";
 import { canonicalChatId } from "./router/routes.js";
+import { buildDescriptor } from "./relay/descriptor.js";
 import { mediaUrl } from "./relay/media-url.js";
 import { createRelayServer, type RelayServer } from "./relay/server.js";
 import { openStoreFromConfig, type Store } from "./store/db.js";
@@ -171,9 +172,17 @@ export async function startServe(opts: ServeOptions): Promise<StartServeResult> 
     },
   };
 
+  // The boot snapshot. Each value below is read exactly once, here, and handed
+  // to the module that needs it as its own option. Only `profiles`, `groups` and
+  // `default_profile` are read live, through `getConfig`; anything else arriving
+  // live would let a hand edit half-apply, with the store enforcing one cap
+  // while the HTTP layer enforced another.
+  const descriptor = buildDescriptor(config);
+
   const router = createRouter({
-    config,
     getConfig,
+    maxMediaBytes: config.media.maxBytes,
+    allowUnroutedOutbound: config.allowUnroutedOutbound,
     store,
     log: log.child({ component: "router" }),
     whatsapp,
@@ -182,8 +191,14 @@ export async function startServe(opts: ServeOptions): Promise<StartServeResult> 
   });
 
   const server = createRelayServer({
-    config,
     getConfig,
+    listen: config.listen,
+    managementSecret: config.management?.secret,
+    maxMediaBytes: config.media.maxBytes,
+    wakeCooldownSeconds: config.buffer.wakeCooldownSeconds,
+    bufferMaxAgeSeconds: config.buffer.maxAgeSeconds,
+    mediaRetentionSeconds: config.media.retentionSeconds,
+    descriptor,
     configStore,
     whatsapp,
     store,

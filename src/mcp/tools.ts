@@ -617,7 +617,7 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
         if (doc.getIn(["profiles", name], true) !== undefined) {
           throw new Error(`profile already exists: ${name}`);
         }
-        const current = opts.configStore?.current;
+        const current = opts.configStore?.get();
         secret = generateSecret(current);
         const usedGatewayIds = new Set(current?.profiles.map((profile) => profile.gatewayId) ?? []);
         do {
@@ -727,7 +727,7 @@ export function createMcpServer(opts: McpToolOptions): McpServer {
               `profile "${name}" reads its secret from an environment variable; rotate it there`
             );
           }
-          secret = generateSecret(opts.configStore?.current);
+          secret = generateSecret(opts.configStore?.get());
           doc.setIn(["profiles", name, "secret"], secret);
         },
         () => {

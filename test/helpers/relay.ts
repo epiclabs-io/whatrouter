@@ -2,7 +2,35 @@
 import pino from "pino";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
 import type { Logger } from "../../src/util/log.js";
-import type { RelayEvent } from "../../src/relay/frames.js";
+import { buildDescriptor } from "../../src/relay/descriptor.js";
+import type { CapabilityDescriptor, RelayEvent } from "../../src/relay/frames.js";
+
+/**
+ * The boot snapshot, as `serve.ts` captures it.
+ *
+ * Tests that build a relay server directly have to pass the settings that
+ * production reads once at boot; this keeps them saying which config they mean
+ * instead of restating the capture.
+ */
+export function bootSettings(config: Config): {
+  listen: { host: string; port: number };
+  managementSecret: string | undefined;
+  maxMediaBytes: number;
+  wakeCooldownSeconds: number;
+  bufferMaxAgeSeconds: number;
+  mediaRetentionSeconds: number;
+  descriptor: CapabilityDescriptor;
+} {
+  return {
+    listen: config.listen,
+    managementSecret: config.management?.secret,
+    maxMediaBytes: config.media.maxBytes,
+    wakeCooldownSeconds: config.buffer.wakeCooldownSeconds,
+    bufferMaxAgeSeconds: config.buffer.maxAgeSeconds,
+    mediaRetentionSeconds: config.media.retentionSeconds,
+    descriptor: buildDescriptor(config),
+  };
+}
 
 export function silentLogger(): Logger {
   return pino({ level: "silent" });

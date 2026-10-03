@@ -722,6 +722,51 @@ profiles:
     }
   });
 
+  it("takes profiles live but keeps the media cap at its boot value", async () => {
+    // The split the whole config refactor rests on: an operator who edits the
+    // file gets the new profile list without the running process quietly
+    // changing the limits it already enforces on open sockets and open files.
+    await configStore.mutate((doc) => {
+      doc.setIn(["media", "max_bytes"], 4096);
+    });
+    const boot = configStore.get().media.maxBytes;
+    expect(boot).toBe(4096);
+
+    const profile = configStore.get().profiles[0];
+    if (profile === undefined) {
+      throw new Error("fixture has no profile");
+    }
+    const upload = (): Promise<Response> =>
+      fetch(`${base}/relay/media`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${makeToken(profile.gatewayId, profile.secret, 300)}`,
+          "content-type": "application/octet-stream",
+        },
+        body: Buffer.alloc(64),
+      });
+
+    try {
+      // Under the boot cap: accepted.
+      expect((await upload()).status).toBe(200);
+
+      // Now shrink the cap live, to a value the boot one would never allow.
+      await configStore.mutate((doc) => {
+        doc.setIn(["media", "max_bytes"], 8);
+      });
+      expect(configStore.get().media.maxBytes).toBe(8);
+
+      // The live value is smaller than the payload, but the boot cap still
+      // governs, so the upload goes through rather than starting to 413.
+      const afterEdit = await upload();
+      expect(afterEdit.status).toBe(200);
+    } finally {
+      await configStore.mutate((doc) => {
+        doc.setIn(["media", "max_bytes"], boot);
+      });
+    }
+  });
+
   it("purges profile runtime state before allowing delete and same-name recreation", async () => {
     const created = await client.callTool({
       name: "create_profile",

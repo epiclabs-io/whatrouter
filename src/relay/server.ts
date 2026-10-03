@@ -32,7 +32,6 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { parseBearer, peekPayload, verifyToken } from "./auth.js";
-import { buildDescriptor } from "./descriptor.js";
 import { contentDisposition } from "./content-disposition.js";
 import { encodeFrame, LineAssembler, parseGatewayFrame } from "./ndjson.js";
 import { Session } from "./session.js";
@@ -51,12 +50,30 @@ import type { Config, ProfileConfig } from "../config/schema.js";
 import type { ConfigStore } from "../config/store.js";
 import type { Logger } from "../util/log.js";
 import type { WhatsAppPort } from "../whatsapp/port.js";
-import type { OutboundAction, OutboundResult, RelayEvent } from "./frames.js";
+import type { CapabilityDescriptor, OutboundAction, OutboundResult, RelayEvent } from "./frames.js";
 
 export interface RelayServerOptions {
-  config: Config;
-  /** Current snapshot for request-time auth, routing metadata, and limits. */
-  getConfig?: (() => Config) | undefined;
+  /**
+   * The live config, read at request time for routing metadata and auth only:
+   * `profiles`, `groups` and `default_profile`. Every other setting is captured
+   * at boot and arrives here as its own option, so a half-applied hand edit
+   * cannot leave the live paths answering to different values.
+   */
+  getConfig: () => Config;
+  /** `listen`, captured at boot. */
+  listen: { host: string; port: number };
+  /** `management.secret`, captured at boot. Absent means no `/management`. */
+  managementSecret: string | undefined;
+  /** `media.max_bytes`, captured at boot. */
+  maxMediaBytes: number;
+  /** `buffer.wake_cooldown_seconds`, captured at boot. */
+  wakeCooldownSeconds: number;
+  /** `buffer.max_age_seconds`, captured at boot. */
+  bufferMaxAgeSeconds: number;
+  /** `media.retention_seconds`, captured at boot. */
+  mediaRetentionSeconds: number;
+  /** The capability descriptor, built once at boot and sent to every session. */
+  descriptor: CapabilityDescriptor;
   /** Enables persistent MCP mutation tools when provided. */
   configStore?: ConfigStore | undefined;
   /** Enables the MCP group-management tools when provided. */
@@ -245,8 +262,8 @@ async function readBody(
 }
 
 export function createRelayServer(opts: RelayServerOptions): RelayServer {
-  const { config, store, log } = opts;
-  const currentConfig = (): Config => opts.getConfig?.() ?? config;
+  const { store, log } = opts;
+  const currentConfig = opts.getConfig;
   const nowSeconds = opts.now ?? ((): number => Math.floor(Date.now() / 1000));
   const nowMs = opts.nowMs ?? Date.now;
   const scheduleHoldExpiry = opts.scheduleHoldExpiry ?? defaultSchedule;
@@ -382,7 +399,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     } catch {
       pathname = "/";
     }
-    const managementSecret = currentConfig().management?.secret;
+    const managementSecret = opts.managementSecret;
     if (pathname === "/management" && managementSecret !== undefined) {
       const authorized = authenticateManagement(req, managementSecret);
       managementWss.handleUpgrade(req, socket, head, (ws) => {
@@ -451,7 +468,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     const session = new Session({
       profile: profile.name,
       store,
-      descriptor: buildDescriptor(currentConfig()),
+      descriptor: opts.descriptor,
       send: (frame) => {
         if (ws.readyState === ws.OPEN) {
           ws.send(encodeFrame(frame));
@@ -589,7 +606,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     if (profile === null) {
       return;
     }
-    const body = await readBody(req, currentConfig().media.maxBytes);
+    const body = await readBody(req, opts.maxMediaBytes);
     if (!body.ok) {
       sendJson(res, 413, { error: "payload too large" });
       return;
@@ -704,7 +721,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     }
     const now = nowSeconds();
     const last = lastWake.get(profile.name);
-    if (last !== undefined && now - last < currentConfig().buffer.wakeCooldownSeconds) {
+    if (last !== undefined && now - last < opts.wakeCooldownSeconds) {
       return;
     }
     lastWake.set(profile.name, now);
@@ -876,9 +893,8 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     mediaPurged: number;
   } {
     throttle.prune(Date.now());
-    const latest = currentConfig();
-    const bufferPurged = store.buffer.purgeOlderThan(latest.buffer.maxAgeSeconds, now);
-    const mediaPurged = store.media.purgeOlderThan(latest.media.retentionSeconds, now);
+    const bufferPurged = store.buffer.purgeOlderThan(opts.bufferMaxAgeSeconds, now);
+    const mediaPurged = store.media.purgeOlderThan(opts.mediaRetentionSeconds, now);
     if (bufferPurged > 0 || mediaPurged > 0) {
       log.info({ bufferPurged, mediaPurged }, "maintenance sweep removed expired rows");
     }
@@ -899,6 +915,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       getConfig: currentConfig,
       configStore: opts.configStore,
       whatsapp: opts.whatsapp,
+      management: opts.managementSecret === undefined ? null : { secret: opts.managementSecret },
       closeProfile,
       releaseProfile,
       removeProfile,
@@ -915,21 +932,21 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       await new Promise<void>((resolvePromise, reject) => {
         const onError = (err: Error): void => reject(err);
         httpServer.once("error", onError);
-        httpServer.listen(config.listen.port, config.listen.host, () => {
+        httpServer.listen(opts.listen.port, opts.listen.host, () => {
           httpServer.removeListener("error", onError);
           resolvePromise();
         });
       });
       const addr = httpServer.address() as AddressInfo | string | null;
       if (addr !== null && typeof addr === "object") {
-        boundHost = config.listen.host;
+        boundHost = opts.listen.host;
         boundPort = addr.port;
       } else {
-        boundHost = config.listen.host;
-        boundPort = config.listen.port;
+        boundHost = opts.listen.host;
+        boundPort = opts.listen.port;
       }
       log.info(
-        { host: boundHost, port: boundPort, profiles: config.profiles.length },
+        { host: boundHost, port: boundPort, profiles: currentConfig().profiles.length },
         "relay server listening"
       );
       return { host: boundHost, port: boundPort };

@@ -13,7 +13,14 @@ import { createRelayServer, type RelayServer } from "../../src/relay/server.js";
 import type { ConnectorFrame, OutboundAction, OutboundResult } from "../../src/relay/frames.js";
 import { openStore, type Store } from "../../src/store/db.js";
 import type { Config, ProfileConfig } from "../../src/config/schema.js";
-import { delay, silentLogger, testConfig, testEvent, testProfile } from "../helpers/relay.js";
+import {
+  bootSettings,
+  delay,
+  silentLogger,
+  testConfig,
+  testEvent,
+  testProfile,
+} from "../helpers/relay.js";
 
 const WORK = testProfile("work");
 const HOME = testProfile("home");
@@ -149,7 +156,8 @@ async function startServer(overrides: Partial<Config> = {}): Promise<Fixture> {
     return { success: false, error: `unsupported op: ${action.op}` };
   };
   const server = createRelayServer({
-    config,
+    getConfig: () => config,
+    ...bootSettings(config),
     store,
     log: silentLogger(),
     execute,
@@ -569,8 +577,10 @@ describe("debug inbound", () => {
   it("is served only when the caller wires it", async () => {
     const injected: unknown[] = [];
     const store = openStore(":memory:", { mediaDir: join(tempDir, "media2") });
+    const debugConfig = testConfig({ profiles: [WORK] });
     const server = createRelayServer({
-      config: testConfig({ profiles: [WORK] }),
+      getConfig: () => debugConfig,
+      ...bootSettings(debugConfig),
       store,
       log: silentLogger(),
       execute: async () => ({ success: true }),

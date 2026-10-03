@@ -157,19 +157,16 @@ export class ConfigStore {
     return store;
   }
 
-  get current(): Config {
-    if (this.#current === null) {
-      throw new Error("ConfigStore has not been loaded");
-    }
-    return this.#current;
-  }
-
   get warnings(): readonly Issue[] {
     return this.#warnings;
   }
 
+  /** The live config. A new object identity means the document changed. */
   get(): Config {
-    return this.current;
+    if (this.#current === null) {
+      throw new Error("ConfigStore has not been loaded");
+    }
+    return this.#current;
   }
 
   async reload(): Promise<Config> {

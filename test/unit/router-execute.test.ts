@@ -80,8 +80,9 @@ function build(
   const wa = createFakeWhatsAppPort();
   const delivered: Array<{ profile: string; event: RelayEvent }> = [];
   const router = createRouter({
-    config,
-    ...(overrides.getConfig === undefined ? {} : { getConfig: overrides.getConfig }),
+    getConfig: overrides.getConfig ?? ((): Config => config),
+    maxMediaBytes: config.media.maxBytes,
+    allowUnroutedOutbound: config.allowUnroutedOutbound,
     store: created.store,
     log: silentLogger(),
     whatsapp: overrides.whatsapp ?? wa,
@@ -625,7 +626,9 @@ describe("onInbound", () => {
     });
     const delivered: RelayEvent[] = [];
     const router = createRouter({
-      config: h.config,
+      getConfig: (): Config => h.config,
+      maxMediaBytes: h.config.media.maxBytes,
+      allowUnroutedOutbound: h.config.allowUnroutedOutbound,
       store: created.store,
       log: silentLogger(),
       whatsapp: createFakeWhatsAppPort(),
@@ -869,7 +872,9 @@ describe("onInbound", () => {
   it("never throws when the relay does", async () => {
     const created = tempStore();
     const router = createRouter({
-      config: h.config,
+      getConfig: (): Config => h.config,
+      maxMediaBytes: h.config.media.maxBytes,
+      allowUnroutedOutbound: h.config.allowUnroutedOutbound,
       store: created.store,
       log: silentLogger(),
       whatsapp: createFakeWhatsAppPort(),
